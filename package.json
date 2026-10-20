@@ -1,0 +1,13 @@
+{
+  "name": "scavenger-royale",
+  "version": "1.0.0",
+  "description": "Colourful first-person LAN battle royale for up to 8 players (three.js).",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Scavenger Royale</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- ===================== LOBBY ===================== -->
+  <div id="lobby" class="screen">
+    <div class="lobby-card">
+      <h1 class="logo"><span>SCAVENGER</span><span>ROYALE</span></h1>
+      <div id="joinInfo" class="join-info"></div>
+      <div class="row">
+        <label for="nameInput">Your name</label>
+        <input id="nameInput" maxlength="16" placeholder="Enter a name" autocomplete="off">
+      </div>
+      <div class="classes" id="classCards"></div>
+      <div class="lobby-bottom">
+        <div class="players">
+          <h3>Players <span id="playerCount"></span></h3>
+          <ul id="playerList"></ul>
+        </div>
+        <div class="host-panel" id="hostPanel">
+          <div id="botRow" class="bot-row">
+            <label>Bots <b id="botVal">0</b></label>
+            <input type="range" id="botRange" min="0" max="7" step="1" value="3">
+          </div>
+          <button id="startBtn" class="big-btn">START MATCH</button>
+          <div id="waitMsg" class="wait-msg">Waiting for the host to start...</div>
+        </div>
+      </div>
+      <details class="help">
+        <summary>How to play</summary>
+        <div class="help-grid">
+          <div><b>Keyboard + mouse</b><br>WASD move · Mouse look · Left click shoot/stab · Right click aim / scope (Melee: dash) · Space jump (Melee: double jump) · Shift sprint · C / Ctrl crouch · R reload · E dash (Melee) · B shop · Tab scoreboard</div>
+          <div><b>Tablet</b><br>Left thumb: move stick (push fully to sprint) · Right thumb: drag to look · Hold FIRE (drag it to aim while shooting) · AIM/DASH, JUMP, CROUCH, RELOAD buttons</div>
+          <div><b>Goal</b><br>Skydive in, scavenge medkits <span class="ico med"></span>, shields <span class="ico sh"></span>, coins and gems inside buildings, spend 🪙 in the shop (B / 🛒), stay inside the shrinking zone and be the last one standing!</div>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ===================== HUD ===================== -->
+  <div id="hud" class="hidden">
+    <div id="topbar">
+      <div class="pill" id="aliveCount">👥 0</div>
+      <div class="pill" id="killCount">💀 0</div>
+      <div class="pill" id="zoneInfo">Zone</div>
+      <div class="pill pts" id="pointsPill">🪙 0</div>
+    </div>
+    <div id="ptsPop"></div>
+    <canvas id="minimap" width="200" height="200"></canvas>
+    <div id="killfeed"></div>
+    <div id="crosshair"></div>
+    <div id="hitmarker"></div>
+    <div id="damageDirs"></div>
+    <div id="centerMsg"></div>
+    <div id="vitals">
+      <div class="bar shield"><div id="shieldFill"></div><span id="shieldText">0</span></div>
+      <div class="bar hp"><div id="hpFill"></div><span id="hpText">100</span></div>
+    </div>
+    <div id="weaponBox">
+      <div id="weaponName">Rifle</div>
+      <div id="ammo">30 / ∞</div>
+      <div id="ability"></div>
+    </div>
+    <div id="zoneVignette"></div>
+    <div id="hurtFlash"></div>
+    <div id="scope"><div class="scope-lines"></div></div>
+  </div>
+
+  <div id="shop" class="hidden">
+    <div class="shop-card">
+      <div class="shop-head">
+        <h2>🛒 Shop</h2>
+        <div class="pill pts" id="shopPts">🪙 0</div>
+        <button id="shopClose" class="shop-close">✕</button>
+      </div>
+      <p class="small">Earn 🪙 from kills (+100) and by scavenging coins (+20) and gems (+50) hidden in buildings. Keys 1–8 buy, B closes.</p>
+      <div id="shopItems"></div>
+      <div id="shopMsg"></div>
+    </div>
+  </div>
+
+  <div id="scoreboard" class="hidden"><h2>Scoreboard</h2><table id="scoreTable"></table></div>
+
+  <div id="deathScreen" class="hidden overlay-msg">
+    <h2 id="deathTitle">ELIMINATED</h2>
+    <p id="deathSub"></p>
+    <p class="small">Spectating <b id="specName"></b> — click / tap to switch</p>
+  </div>
+
+  <div id="endScreen" class="hidden screen">
+    <div class="lobby-card">
+      <h1 id="endTitle" class="win-title">WINNER!</h1>
+      <table id="endTable"></table>
+      <p class="small">Back to the lobby in a few seconds…</p>
+    </div>
+  </div>
+
+  <div id="clickToPlay" class="hidden overlay-msg clickable"><h2>Click to play</h2><p class="small">Esc frees the mouse</p></div>
+  <div id="connMsg" class="overlay-msg">Connecting…</div>
+
+  <!-- ===================== TOUCH ===================== -->
+  <div id="touch" class="hidden">
+    <div id="stickZone"></div>
+    <div id="stickBase"><div id="stickKnob"></div></div>
+    <div id="lookZone"></div>
+    <button class="tbtn" id="tFire">FIRE</button>
+    <button class="tbtn" id="tAim">AIM</button>
+    <button class="tbtn" id="tJump">JUMP</button>
+    <button class="tbtn" id="tCrouch">CROUCH</button>
+    <button class="tbtn" id="tReload">RELOAD</button>
+    <button class="tbtn small" id="tScore">☰</button>
+    <button class="tbtn small" id="tShop">🛒</button>
+  </div>
+
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
