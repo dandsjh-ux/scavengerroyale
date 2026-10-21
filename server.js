@@ -13,7 +13,8 @@ import { EventEmitter } from 'node:events';
 import {
   CLASSES, MAX_PLAYERS, ZONE_PHASES, ZONE_START_RADIUS, PLAYER_COLORS, BOT_NAMES, MAX_HP, MAX_SHIELD,
   MEDKIT_HEAL, SHIELD_GAIN, DROP_HEIGHT, EYE_HEIGHT, BODY_HEIGHT, computeDamage, MAP_HALF,
-  POINTS, SHOP_ITEMS, DMG_UPGRADE, GRENADE, MUTATORS, mut, BOT_SKILL, SUPPLY_DROP_EVERY, DROP_FALL_SPEED,
+  POINTS, SHOP_ITEMS, DMG_UPGRADE, GRENADE, MUTATORS, mut, BOT_SKILL, DROP_FALL_SPEED,
+  KNIFE, RESPAWN_DROP_HEIGHT, SHOP_NEEDS_ALIVE, SETTINGS, defaultSettings, allowedClasses,
 } from './public/shared/config.js';
 import { generateMap } from './public/shared/map.js';
 import { World, stepBody, stepGrenade, lineOfSight } from './public/shared/physics.js';
@@ -26,7 +27,7 @@ const NO_OPEN = process.argv.includes('--no-open') || process.env.NO_OPEN;
 // ------------------------------------------------------------------ HTTP
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.txt': 'text/plain',
+  '.json': 'application/json', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.txt': 'text/plain',
 };
 
 const server = http.createServer((req, res) => {
@@ -128,6 +129,24 @@ const game = {
 };
 const session = new Map();   // name -> { name, wins, kills, games } for this server run
 const M = () => mut(game.mut);
+
+// Host settings are saved next to the server so the host keeps them between sessions.
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+game.settings = defaultSettings();
+try {
+  const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+  for (const def of SETTINGS) if (def.options.some((o) => o[0] === saved[def.key])) game.settings[def.key] = saved[def.key];
+  if (Number.isInteger(saved.bots)) game.bots = Math.max(0, Math.min(7, saved.bots));
+  if (saved.mutator === 'random' || MUTATORS[saved.mutator]) game.mutator = saved.mutator;
+  if (BOT_SKILL[saved.botSkill]) game.botSkill = saved.botSkill;
+} catch { /* first run: defaults */ }
+function saveSettings() {
+  const data = { ...game.settings, bots: game.bots, mutator: game.mutator, botSkill: game.botSkill };
+  fs.writeFile(SETTINGS_FILE, JSON.stringify(data, null, 2), () => {});
+}
+const SET = () => game.settings;
+// Respawns and the shop shut down once the last N circles have been announced.
+const isLocked = () => !!game.zone && game.zone.idx >= ZONE_PHASES.length - SET().lockCircles;
 buildMap();
 
 function newSeed() { return (Math.random() * 0xffffffff) >>> 0; }
@@ -153,18 +172,28 @@ function makePlayer(fields) {
     x: 0, y: 0, z: 0, yaw: 0, pitch: 0, crouch: 0, glide: 0,
     hp: MAX_HP, shield: 0, alive: false, inMatch: false, kills: 0, place: 0,
     lastShot: 0, joinedAt: Date.now(), points: 0, up: newUpgrades(), nades: 0, lastNade: 0, scope: 0,
+    lastSlam: 0, lastKnifeThrow: 0, respawnAt: null, livesUsed: 0,
     stats: newStats(), ...fields,
   };
 }
 
 function newUpgrades() { return { dmg: 0, speed: 0, jump: 0, mag: 0 }; }
 function newStats() { return { dmg: 0, longest: 0, earned: 0, nadeKills: 0 }; }
-const dmgMult = (p) => (1 + DMG_UPGRADE * p.up.dmg) * (M().dmgMult || 1);
-const maxNades = (p) => CLASSES[p.cls].grenades.max;
+const dmgMult = (p) => (1 + DMG_UPGRADE * p.up.dmg) * (M().dmgMult || 1) * SET().dmg;
+function nadeCaps(p) {
+  const g = CLASSES[p.cls].grenades;
+  if (SET().grenades === 'off') return { start: 0, max: 0 };
+  if (SET().grenades === 'double') return { start: g.max, max: g.max * 2 };
+  return g;
+}
+const maxNades = (p) => nadeCaps(p).max;
+const startNades = (p) => (M().fullNades ? nadeCaps(p).max : nadeCaps(p).start);
+const startShield = (p) => Math.min(MAX_SHIELD, (CLASSES[p.cls].startShield || 0) + SET().startShield);
+const itemCost = (item) => Math.round(item.cost * SET().prices);
 
 function givePoints(p, n, why) {
   if (p.isBot || !n) return;
-  n = Math.round(n * (M().pointsMult || 1));
+  n = Math.round(n * (M().pointsMult || 1) * SET().pointsMult);
   p.points += n;
   p.stats.earned += n;
   send(p, { t: 'pts', pts: p.points, up: p.up, gain: n, why });
@@ -174,15 +203,20 @@ function sendInv(p) { send(p, { t: 'inv', nades: p.nades, max: maxNades(p) }); }
 
 function onBuy(p, id) {
   const item = SHOP_ITEMS.find((i) => i.id === id);
-  if (!item || !p.inMatch || !p.alive) return;
+  if (!item || !p.inMatch || game.phase !== 'playing') return;
   const fail = (msg) => send(p, { t: 'shopfail', msg });
+  if (SET().shop === 'off') return fail('The shop is turned off for this match');
+  if (isLocked()) return fail('The shop is closed in the final circles');
+  if (!p.alive && (SHOP_NEEDS_ALIVE.includes(id) || p.respawnAt == null)) return fail('You can buy that after you respawn');
+  if (id === 'nade' && maxNades(p) === 0) return fail('Grenades are turned off');
   if (item.notFor === p.cls) return fail(`${item.name} doesn't work with your class`);
   if (item.max && (p.up[id] || 0) >= item.max) return fail(`${item.name} is already maxed`);
   if (id === 'med' && p.hp >= MAX_HP) return fail('Health is already full');
   if ((id === 'shield' || id === 'bigshield') && p.shield >= MAX_SHIELD) return fail('Shield is already full');
   if (id === 'nade' && p.nades >= maxNades(p)) return fail(`You can only carry ${maxNades(p)} grenades`);
-  if (p.points < item.cost) return fail(`Need ${item.cost - p.points} more points`);
-  p.points -= item.cost;
+  const cost = itemCost(item);
+  if (p.points < cost) return fail(`Need ${cost - p.points} more points`);
+  p.points -= cost;
   if (id === 'med') p.hp = Math.min(MAX_HP, p.hp + MEDKIT_HEAL);
   else if (id === 'shield') p.shield = Math.min(MAX_SHIELD, p.shield + SHIELD_GAIN);
   else if (id === 'bigshield') p.shield = MAX_SHIELD;
@@ -205,7 +239,7 @@ function pickHost() {
 function lobbyState() {
   return {
     t: 'lobby', phase: game.phase, seed: game.seed, host: game.hostId, bots: game.bots,
-    mutator: game.mutator, botSkill: game.botSkill,
+    mutator: game.mutator, botSkill: game.botSkill, settings: game.settings,
     session: [...session.values()].sort((a, b) => b.wins - a.wins || b.kills - a.kills).slice(0, 8),
     players: [...players.values()].map((p) => ({ id: p.id, name: p.name, cls: p.cls, color: p.color, bot: p.isBot, inMatch: p.inMatch })),
   };
@@ -237,6 +271,7 @@ function onConnection(ws, addr) {
     console.log(`  - ${me.name} left`);
     if (me.inMatch && me.alive) killPlayer(me, null, 'left');
     players.delete(me.id);
+    checkEnd(); // they may have been waiting to respawn
     if (game.hostId === me.id) pickHost();
     if (humans().length === 0) resetToLobby();
     broadcast(lobbyState());
@@ -250,20 +285,36 @@ function cleanName(n) {
 
 function handle(p, m) {
   switch (m.t) {
-    case 'cfg':
-      if (game.phase === 'lobby' || !p.inMatch) {
-        if (m.name != null) p.name = cleanName(m.name);
-        if (m.cls && CLASSES[m.cls]) p.cls = m.cls;
+    case 'cfg': {
+      // name/class changes in the lobby, while spectating, or while waiting to respawn
+      const waiting = p.inMatch && !p.alive && p.respawnAt != null;
+      if (game.phase === 'lobby' || !p.inMatch || waiting) {
+        if (m.name != null && !waiting) p.name = cleanName(m.name);
+        if (m.cls && CLASSES[m.cls] && allowedClasses(SET()).includes(m.cls)) p.cls = m.cls;
         broadcast(lobbyState());
       }
       break;
+    }
     case 'bots':
-      if (p.id === game.hostId && game.phase === 'lobby') { game.bots = Math.max(0, Math.min(7, m.n | 0)); broadcast(lobbyState()); }
+      if (p.id === game.hostId && game.phase === 'lobby') { game.bots = Math.max(0, Math.min(7, m.n | 0)); saveSettings(); broadcast(lobbyState()); }
       break;
+    case 'set': {
+      if (p.id !== game.hostId || game.phase !== 'lobby') break;
+      const def = SETTINGS.find((d) => d.key === m.key);
+      const opt = def && def.options[m.i | 0];
+      if (!opt) break;
+      const next = { ...game.settings, [def.key]: opt[0] };
+      if (!allowedClasses(next).length) break; // keep at least one class
+      game.settings = next;
+      saveSettings();
+      broadcast(lobbyState());
+      break;
+    }
     case 'opts':
       if (p.id === game.hostId && game.phase === 'lobby') {
         if (m.mutator === 'random' || MUTATORS[m.mutator]) game.mutator = m.mutator;
         if (BOT_SKILL[m.botSkill]) game.botSkill = m.botSkill;
+        saveSettings();
         broadcast(lobbyState());
       }
       break;
@@ -301,21 +352,50 @@ function onShot(p, m) {
   if (applyDamage(v, Math.round(dmg), p, p.cls, head)) p.stats.longest = Math.max(p.stats.longest, Math.round(dist));
 }
 
+const KNIFE_MOVES = ['slash', 'backhand', 'finisher', 'lunge', 'slam', 'throw'];
+
 function onMelee(p, m) {
   if (!p.inMatch || !p.alive || p.glide || p.cls !== 'melee') return;
+  const kind = KNIFE_MOVES.includes(m.k) ? m.k : 'slash';
   const w = CLASSES.melee.weapon;
   const now = game.time;
-  if (now - p.lastShot < w.rate * 0.6) return;
-  p.lastShot = now;
-  broadcast({ t: 'fx', k: 'swing', id: p.id }, p);
+  if (kind === 'slam') { if (now - p.lastSlam < KNIFE.slam.cooldown * 0.8) return; p.lastSlam = now; }
+  else if (kind === 'throw') { if (now - p.lastKnifeThrow < KNIFE.throw.cooldown * 0.8) return; p.lastKnifeThrow = now; }
+  else { if (now - p.lastShot < w.rate * 0.6) return; p.lastShot = now; }
+  const fx = { t: 'fx', k: 'swing', id: p.id, v: kind };
+  if (kind === 'throw' && Array.isArray(m.o) && Array.isArray(m.e)) { fx.o = m.o; fx.e = m.e; }
+  broadcast(fx, p);
+  if (kind === 'slam') { knifeSlam(p, dmgMult(p)); return; }
   if (m.hit == null) return;
   const v = players.get(m.hit);
   if (!v || v === p || !v.inMatch || !v.alive) return;
   const dist = Math.hypot(v.x - p.x, v.y - p.y, v.z - p.z);
-  if (dist > w.range + 1.6) return;
+  const reach = kind === 'throw' ? KNIFE.throw.range + 4 : kind === 'lunge' ? KNIFE.lungeRange + 1.6 : w.range + 1.6;
+  if (dist > reach) return;
+  if (kind === 'throw') {
+    applyDamage(v, Math.round(KNIFE.throw.damage * dmgMult(p)), p, 'throw', false, false, null, { kind });
+    return;
+  }
   const back = isBehind(v, p);
-  applyDamage(v, Math.round(computeDamage('melee', dist, false, back) * dmgMult(p)), p, 'melee', false, back);
+  let dmg = computeDamage('melee', dist, false, back) * dmgMult(p);
+  if (kind === 'finisher') dmg *= KNIFE.finisherMult;
+  if (kind === 'lunge') dmg *= KNIFE.lungeMult;
+  applyDamage(v, Math.round(dmg), p, 'melee', false, back, null, { kind });
   lifesteal(p);
+}
+
+// Ground slam: damages everyone close to where the attacker lands.
+function knifeSlam(p, mult) {
+  const R = KNIFE.slam.radius;
+  for (const v of aliveList()) {
+    if (v === p) continue;
+    const d = Math.hypot(v.x - p.x, v.z - p.z);
+    if (d > R || Math.abs(v.y - p.y) > 2.5) continue;
+    if (!lineOfSight(game.world, p.x, p.y + 0.5, p.z, v.x, v.y + 1, v.z)) continue;
+    const dmg = KNIFE.slam.damage * mult * (1 - 0.4 * d / R);
+    applyDamage(v, Math.round(dmg), p, 'melee', false, false, [p.x, p.z], { kind: 'slam' });
+    lifesteal(p);
+  }
 }
 
 function lifesteal(p) {
@@ -377,8 +457,8 @@ function isBehind(victim, attacker) {
   return fx * ax + fz * az < -0.4;
 }
 
-function applyDamage(v, amount, attacker, weapon, head = false, backstab = false, from = null) {
-  if (!v.alive) return false;
+function applyDamage(v, amount, attacker, weapon, head = false, backstab = false, from = null, extra = null) {
+  if (!v.alive || v.glide) return false; // skydiving players (including respawns) are safe until they land
   const resist = CLASSES[v.cls].resist;
   if (resist && weapon !== 'zone') amount = Math.round(amount * resist);
   let rest = amount;
@@ -387,14 +467,24 @@ function applyDamage(v, amount, attacker, weapon, head = false, backstab = false
   const killed = v.hp <= 0;
   if (attacker) attacker.stats.dmg += amount;
   send(v, { t: 'hurt', amt: amount, from: from || (attacker ? [attacker.x, attacker.z] : null), w: weapon });
-  if (attacker) send(attacker, { t: 'hitm', v: v.id, head, kill: killed, back: backstab, amt: amount, w: weapon });
+  if (attacker) send(attacker, { t: 'hitm', v: v.id, head, kill: killed, back: backstab, amt: amount, w: weapon, ...extra });
   if (killed) killPlayer(v, attacker, weapon, head);
   return killed;
 }
 
+const remaining = () => [...players.values()].filter((p) => p.inMatch && (p.alive || p.respawnAt != null));
+
+function canRespawn(v, weapon) {
+  const S = SET();
+  return S.respawn === 'on' && weapon !== 'left' && game.phase === 'playing' && !isLocked() &&
+    (S.lives === 0 || v.livesUsed < S.lives);
+}
+
 function killPlayer(v, killer, weapon, head = false) {
   v.alive = false; v.hp = 0;
-  v.place = aliveList().length + 1;
+  const respawn = canRespawn(v, weapon);
+  if (respawn) { v.respawnAt = game.time + SET().respawnDelay; v.livesUsed++; v.place = 0; }
+  else { v.respawnAt = null; v.place = remaining().length + 1; }
   const wasBounty = game.bountyId === v.id;
   if (killer && killer !== v) {
     killer.kills++;
@@ -402,12 +492,36 @@ function killPlayer(v, killer, weapon, head = false) {
     if (wasBounty) givePoints(killer, POINTS.bounty, 'bounty');
     if (!killer.isBot) sessionEntry(killer).kills++;
   }
-  broadcast({ t: 'kill', k: killer ? killer.id : null, v: v.id, w: weapon, hs: head, place: v.place, bounty: wasBounty });
-  // the fallen drop a loot bag: some of their points plus a grenade
+  const livesLeft = SET().lives === 0 ? -1 : Math.max(0, SET().lives - v.livesUsed);
+  broadcast({ t: 'kill', k: killer ? killer.id : null, v: v.id, w: weapon, hs: head, place: v.place, bounty: wasBounty,
+    respawn: respawn ? SET().respawnDelay : 0, lives: livesLeft });
+  // the fallen drop a loot bag: a quarter of their points plus a grenade
   if (weapon !== 'left' && game.phase === 'playing') {
-    addPickup('bag', v.x, Math.max(0, v.y), v.z, { value: 40 + Math.floor(v.points * 0.5), nades: v.nades > 0 ? 1 : 0 });
+    const lose = Math.floor(v.points * 0.25);
+    if (lose) { v.points -= lose; send(v, { t: 'pts', pts: v.points, up: v.up, gain: 0 }); }
+    addPickup('bag', v.x, Math.max(0, v.y), v.z, { value: 40 + lose, nades: v.nades > 0 ? 1 : 0 });
   }
   checkEnd();
+}
+
+function respawnPlayer(p) {
+  const z = game.zone;
+  const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * Math.max(5, Math.min(z.r, MAP_HALF) * 0.7);
+  const lim = MAP_HALF - 6;
+  const x = Math.max(-lim, Math.min(lim, z.cx + Math.cos(a) * d)), zz = Math.max(-lim, Math.min(lim, z.cz + Math.sin(a) * d));
+  Object.assign(p, { alive: true, respawnAt: null, hp: MAX_HP, shield: startShield(p), nades: startNades(p),
+    lastShot: 0, scope: 0, crouch: 0, nadeAcc: 0, zoneAcc: 0 });
+  if (p.isBot) {
+    let best = game.map.spawnSpots[0], bd = Infinity;
+    for (const s of game.map.spawnSpots) { const dd = Math.hypot(s[0] - x, s[1] - zz); if (dd < bd) { bd = dd; best = s; } }
+    Object.assign(p, { x: best[0], y: 0, z: best[1], vx: 0, vy: 0, vz: 0, glide: 0, onGround: true });
+  } else {
+    Object.assign(p, { x, y: RESPAWN_DROP_HEIGHT, z: zz, glide: 1, yaw: Math.atan2(x - z.cx, zz - z.cz) });
+    const livesLeft = SET().lives === 0 ? -1 : Math.max(0, SET().lives - p.livesUsed);
+    send(p, { t: 'respawn', spawn: [r2(p.x), p.y, r2(p.z)], yaw: p.yaw, cls: p.cls, lives: livesLeft });
+    sendInv(p);
+  }
+  broadcast({ t: 'respawned', id: p.id });
 }
 
 function sessionEntry(p) {
@@ -455,7 +569,8 @@ function startMatch() {
   game.mut = game.mutator === 'random' ? ids[Math.floor(Math.random() * ids.length)] : game.mutator;
   const nb = Math.min(game.bots, MAX_PLAYERS - hs.length);
   const names = [...BOT_NAMES].sort(() => Math.random() - 0.5);
-  const clsList = ['sniper', 'rifle', 'melee'];
+  const clsList = allowedClasses(SET());
+  for (const h of hs) if (!clsList.includes(h.cls)) h.cls = clsList[0];
   for (let i = 0; i < nb; i++) {
     const b = makePlayer({ isBot: true, name: names[i] + ' (bot)', cls: clsList[i % 3] });
     b.ai = { goal: null, goalT: 0, target: null, think: 0, react: 0, stuckT: 0, lastX: 0, lastZ: 0, detour: 0, dx: 0, dz: 0, nadeT: 4 + Math.random() * 6 };
@@ -466,9 +581,10 @@ function startMatch() {
   const startAngle = Math.random() * Math.PI * 2;
   all.forEach((p, i) => {
     const C = CLASSES[p.cls];
-    p.inMatch = true; p.alive = true; p.hp = MAX_HP; p.shield = C.startShield || 0; p.kills = 0; p.place = 0; p.lastShot = 0;
+    p.inMatch = true; p.alive = true; p.hp = MAX_HP; p.shield = startShield(p); p.kills = 0; p.place = 0; p.lastShot = 0;
     p.points = 0; p.up = newUpgrades(); p.stats = newStats(); p.scope = 0; p.lastNade = 0; p.nadeAcc = 0;
-    p.nades = M().fullNades ? C.grenades.max : C.grenades.start;
+    p.respawnAt = null; p.livesUsed = 0; p.lastSlam = 0; p.lastKnifeThrow = 0;
+    p.nades = startNades(p);
     if (!p.isBot) sessionEntry(p).games++;
     if (p.isBot) {
       const spots = game.map.spawnSpots;
@@ -482,13 +598,15 @@ function startMatch() {
   });
   game.startedWith = all.length;
   // pickups
-  const spots = [...game.map.pickupSpots].sort(() => Math.random() - 0.5).slice(0, 140);
-  const lootType = () => { const r = Math.random(); return r < 0.27 ? 'med' : r < 0.49 ? 'shield' : r < 0.6 ? 'nade' : r < 0.86 ? 'coin' : 'gem'; };
+  const spots = [...game.map.pickupSpots].sort(() => Math.random() - 0.5).slice(0, SET().loot);
+  const noNades = SET().grenades === 'off';
+  const lootType = () => { const r = Math.random(); return r < 0.27 ? 'med' : r < 0.49 ? 'shield' : r < 0.6 ? (noNades ? 'coin' : 'nade') : r < 0.86 ? 'coin' : 'gem'; };
   game.pickups = spots.map((s, i) => ({ id: i, type: lootType(), x: s[0], y: s[1], z: s[2], taken: false }));
   game.nextPickupId = game.pickups.length;
   game.nades = [];
   game.bountyId = null;
-  game.nextDropAt = 50;
+  game.nextDropAt = SET().drops ? 50 : Infinity;
+  game.locked = false;
   // zone
   game.zone = { cx: 0, cz: 0, r: ZONE_START_RADIUS, fx: 0, fz: 0, fr: ZONE_START_RADIUS, tx: 0, tz: 0, tr: 0, idx: 0, stage: 'wait', t: 0 };
   pickZoneTarget();
@@ -548,16 +666,16 @@ function zoneDps() {
 
 function checkEnd() {
   if (game.phase !== 'playing') return;
-  const alive = aliveList();
-  if (game.startedWith <= 1) { if (!alive.length) endMatch(null); return; } // solo practice
-  if (alive.length <= 1) return endMatch(alive[0] || null);
-  if (!alive.some((p) => !p.isBot)) endMatch(null); // every human is out: the bots win
+  const left = remaining(); // alive, or waiting to respawn
+  if (game.startedWith <= 1) { if (!left.length) endMatch(null); return; } // solo practice
+  if (left.length <= 1) return endMatch(left[0] || null);
+  if (!left.some((p) => !p.isBot)) endMatch(null); // every human is out: the bots win
 }
 
 function endMatch(winner) {
   game.phase = 'ended';
   if (winner) winner.place = 1;
-  for (const p of aliveList()) p.place = 1;
+  for (const p of remaining()) p.place = 1;
   const ps = inMatch();
   const standings = ps.sort((a, b) => (a.place || 99) - (b.place || 99) || b.kills - a.kills)
     .map((p) => ({ id: p.id, name: p.name, cls: p.cls, color: p.color, kills: p.kills, place: p.place, dmg: p.stats.dmg }));
@@ -580,7 +698,7 @@ function endMatch(winner) {
 function resetToLobby() {
   for (const p of [...players.values()]) {
     if (p.isBot) players.delete(p.id);
-    else { p.inMatch = false; p.alive = false; }
+    else { p.inMatch = false; p.alive = false; p.respawnAt = null; }
   }
   game.phase = 'lobby';
   game.zone = null;
@@ -684,7 +802,7 @@ function updateBot(b, dt) {
   if (b.cls === 'melee') {
     if (d3 > wp.range) return;
     b.lastShot = game.time;
-    broadcast({ t: 'fx', k: 'swing', id: b.id });
+    broadcast({ t: 'fx', k: 'swing', id: b.id, v: ['slash', 'backhand', 'finisher', 'lunge'][Math.floor(Math.random() * 4)] });
     const back = isBehind(t, b);
     applyDamage(t, Math.round(computeDamage('melee', d3, false, back) * skill.dmg * (M().dmgMult || 1)), b, 'melee', false, back);
     lifesteal(b);
@@ -709,19 +827,21 @@ setInterval(() => {
   const dt = TICK;
   if (game.phase === 'playing') {
     game.time += dt;
-    updateZone(dt * (M().zoneSpeed || 1));
+    updateZone(dt * (M().zoneSpeed || 1) * SET().zoneSpeed);
     updateNades(dt);
-    if (game.time >= game.nextDropAt && game.zone.stage !== 'closed') { spawnSupplyDrop(); game.nextDropAt = game.time + SUPPLY_DROP_EVERY; }
+    if (game.time >= game.nextDropAt && game.zone.stage !== 'closed') { spawnSupplyDrop(); game.nextDropAt = game.time + SET().drops; }
+    if (isLocked() && !game.locked) { game.locked = true; broadcast({ t: 'lock' }); }
+    for (const p of inMatch()) if (!p.alive && p.respawnAt != null && game.time >= p.respawnAt) respawnPlayer(p);
     // bounty: the outright kill leader (2+ kills) is marked for everyone
     const leader = aliveList().reduce((a, p) => (p.kills > (a ? a.kills : 1) ? p : a), null);
     const tied = leader && aliveList().some((p) => p !== leader && p.kills === leader.kills);
-    const bounty = leader && !tied ? leader.id : null;
+    const bounty = leader && !tied && SET().bounty !== 'off' ? leader.id : null;
     if (bounty !== game.bountyId) {
       game.bountyId = bounty;
       if (bounty) broadcast({ t: 'bounty', id: bounty });
     }
     const z = game.zone;
-    const dps = zoneDps();
+    const dps = zoneDps() * SET().zoneDmg;
     for (const p of aliveList()) {
       if (p.isBot) updateBot(p, dt);
       if (!p.alive) continue;
@@ -765,9 +885,10 @@ setInterval(() => {
     const snap = {
       t: 's',
       z: game.zone ? zoneInfo() : null,
+      lk: game.locked ? 1 : 0,
       a: aliveList().length,
       b: game.bountyId,
-      p: inMatch().map((p) => [p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.crouch, p.glide, p.alive ? 1 : 0, Math.max(0, Math.ceil(p.hp)), Math.ceil(p.shield), p.kills, p.scope]),
+      p: inMatch().map((p) => [p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.crouch, p.glide, p.alive ? 1 : 0, Math.max(0, Math.ceil(p.hp)), Math.ceil(p.shield), p.kills, p.scope, p.respawnAt != null ? 1 : 0]),
     };
     broadcast(snap);
   }

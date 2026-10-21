@@ -2,12 +2,14 @@ import * as THREE from 'three';
 import {
   CLASSES, BODY_HEIGHT, CROUCH_HEIGHT, EYE_HEIGHT, CROUCH_EYE, GLIDE_FALL_SPEED, GLIDE_MOVE_SPEED, MAX_HP, MAX_SHIELD, MAP_HALF,
   SHOP_ITEMS, SPEED_UPGRADE, JUMP_UPGRADE, MAG_UPGRADE, RADAR_TIME, GRENADE, MUTATORS, mut, BOT_SKILL,
+  KNIFE, SETTINGS, defaultSettings, allowedClasses, SHOP_NEEDS_ALIVE,
 } from '../shared/config.js';
 import { generateMap } from '../shared/map.js';
 import { World, stepBody, stepGrenade, raySphere, rayBox, lineOfSight } from '../shared/physics.js';
 import { Renderer, THEMES, themeForSeed } from './render.js';
 import { Input } from './input.js';
 import * as SFX from './audio.js';
+import { voice, killVoice, preloadAllVoices } from './voice.js';
 
 // ------------------------------------------------------------------ setup
 const params = new URLSearchParams(location.search);
@@ -36,6 +38,8 @@ const S = {
   points: 0, up: { dmg: 0, speed: 0, jump: 0, mag: 0 }, shopOpen: false, radarUntil: 0,
   nades: 0, maxNades: 0, lastThrow: 0, nadeSims: new Map(),
   mut: 'classic', bountyId: null, marks: new Map(), bloom: 0, fovKick: 0,
+  settings: defaultSettings(), locked: false, myKills: 0, respawnAt: 0, livesLeft: -1,
+  combo: 0, comboLast: 0, lastSlam: 0, lastKnifeThrow: 0,
 };
 const NADE_DT = 0.05; // grenades are stepped at the server's tick rate so client and server paths match
 const gScale = () => mut(S.mut).gravity || 1;
@@ -77,6 +81,11 @@ function onMessage(m) {
     case 'pkadd': R.addPickups(m.list); break;
     case 'drop': banner('📦 Supply drop incoming! Check your minimap'); SFX.sfxDrop(); break;
     case 'bounty': onBounty(m); break;
+    case 'respawn': onRespawn(m); break;
+    case 'lock':
+      S.locked = true; closeShop();
+      banner(`🔒 Final circles! ${S.settings.respawn === 'on' ? 'Respawns' : 'Eliminations are final'} and the shop are now closed`);
+      break;
   }
 }
 
@@ -102,7 +111,9 @@ function buildClassCards() {
     const bar = (label, v) => `<div class="stat"><span>${label}</span><i><b style="width:${v * 20}%"></b></i></div>`;
     el.innerHTML = `<h3>${c.name}</h3><p>${c.desc}</p>${bar('Speed', c.stats.speed)}${bar('Range', c.stats.range)}${bar('Damage', c.stats.damage)}` +
       `<div class="passive">★ ${c.passive}</div><div class="nades">💣 Grenades: start ${c.grenades.start}, carry up to ${c.grenades.max}</div>`;
+    el.dataset.cls = key;
     el.onclick = () => {
+      if (!allowedClasses(S.settings).includes(key)) return;
       S.cls = key; store.set('sr_cls', key);
       wrap.querySelectorAll('.class-card').forEach((n) => n.classList.remove('sel'));
       el.classList.add('sel');
@@ -120,6 +131,32 @@ nameInput.addEventListener('input', () => {
 });
 nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') nameInput.blur(); });
 $('botRange').addEventListener('input', (e) => { $('botVal').textContent = e.target.value; send({ t: 'bots', n: +e.target.value }); });
+// ---- host settings panel (built from the SETTINGS list in config.js) ----
+function buildSettingsPanel() {
+  const grid = $('settingsGrid');
+  const groups = {};
+  for (const def of SETTINGS) (groups[def.group] ||= []).push(def);
+  grid.innerHTML = Object.entries(groups).map(([g, defs]) => `<div class="set-group"><h4>${g}</h4>` + defs.map((d) =>
+    `<div class="set-row"><label for="set_${d.key}">${d.label}</label><select id="set_${d.key}">` +
+    d.options.map((o, i) => `<option value="${i}">${o[1]}</option>`).join('') + '</select></div>').join('') + '</div>').join('');
+  for (const d of SETTINGS) $('set_' + d.key).addEventListener('change', (e) => send({ t: 'set', key: d.key, i: +e.target.value }));
+}
+buildSettingsPanel();
+
+function applySettings(set, isHost) {
+  S.settings = set;
+  for (const d of SETTINGS) {
+    const el = $('set_' + d.key);
+    const i = d.options.findIndex((o) => o[0] === set[d.key]);
+    if (i >= 0 && document.activeElement !== el) el.value = i;
+    el.disabled = !isHost;
+  }
+  $('settingsWho').textContent = isHost ? '(you are the host)' : '(set by the host)';
+  const allowed = allowedClasses(set);
+  document.querySelectorAll('.class-card').forEach((el) => el.classList.toggle('off', !allowed.includes(el.dataset.cls)));
+  if (!allowed.includes(S.cls)) $('classCards').querySelector(`[data-cls="${allowed[0]}"]`)?.click();
+}
+
 const mutSel = $('mutSelect'), skillSel = $('botSkill');
 mutSel.innerHTML = '<option value="random">🎲 Random</option>' + Object.entries(MUTATORS).map(([k, v]) => `<option value="${k}">${v.icon} ${v.name}</option>`).join('');
 skillSel.innerHTML = Object.entries(BOT_SKILL).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
@@ -127,8 +164,14 @@ const sendOpts = () => send({ t: 'opts', mutator: mutSel.value, botSkill: skillS
 mutSel.addEventListener('change', sendOpts);
 skillSel.addEventListener('change', sendOpts);
 $('startBtn').addEventListener('click', () => { SFX.unlockAudio(); send({ t: 'cfg', name: S.name, cls: S.cls }); send({ t: 'start' }); });
+const voiceVol = $('voiceVol');
+voiceVol.value = store.get('sr_voice', '0.9');
+SFX.setVoiceVolume(+voiceVol.value);
+voiceVol.addEventListener('input', () => { SFX.setVoiceVolume(+voiceVol.value); store.set('sr_voice', voiceVol.value); });
+voiceVol.addEventListener('change', () => { SFX.unlockAudio(); voice('kill'); }); // preview
 document.addEventListener('pointerdown', () => {
   SFX.unlockAudio();
+  preloadAllVoices();
   // tablets: go fullscreen on the first touch during a match
   if (touch && S.phase === 'playing' && !document.fullscreenElement && document.documentElement.requestFullscreen) {
     document.documentElement.requestFullscreen().catch(() => {});
@@ -165,6 +208,7 @@ function onLobby(m) {
   const humans = m.players.filter((p) => !p.bot).length;
   $('playerCount').textContent = `(${humans}/8)`;
   const isHost = m.host === S.myId;
+  if (m.settings) applySettings(m.settings, isHost);
   $('botRange').disabled = mutSel.disabled = skillSel.disabled = !isHost;
   mutSel.value = m.mutator; skillSel.value = m.botSkill;
   $('mutDesc').textContent = m.mutator === 'random' ? 'A surprise mutator is picked each match.' : mut(m.mutator).desc;
@@ -190,7 +234,8 @@ function enterLobby() {
   S.nadeSims.clear();
   S.snap.clear();
   input.unlock();
-  ['hud', 'endScreen', 'deathScreen', 'clickToPlay', 'touch', 'scoreboard'].forEach((id) => $(id).classList.add('hidden'));
+  ['hud', 'endScreen', 'deathScreen', 'clickToPlay', 'touch', 'scoreboard', 'respawnBox'].forEach((id) => $(id).classList.add('hidden'));
+  S.respawnAt = 0;
   $('lobby').classList.remove('hidden');
 }
 
@@ -202,6 +247,7 @@ function onStart(m) {
   R.setPickups(m.pickups || []);
   R.clearNades(); R.clearEffects(); S.nadeSims.clear();
   S.mut = m.mut || 'classic'; S.bountyId = null; S.marks.clear(); S.bloom = 0;
+  S.locked = false; S.myKills = 0; S.respawnAt = 0; S.combo = 0; S.lastSlam = 0; S.lastKnifeThrow = 0;
   const mu = mut(S.mut);
   $('mutPill').textContent = S.mut === 'classic' ? '' : `${mu.icon} ${mu.name}`;
   if (S.mut !== 'classic') setTimeout(() => banner(`${mu.icon} ${mu.name}: ${mu.desc}`), 4500);
@@ -214,20 +260,9 @@ function onStart(m) {
   input.resetTouchToggles();
   input.clearPressed();
   if (S.inMatch) {
-    const [x, y, z] = m.spawn;
-    S.me = { x, y, z, vx: 0, vy: 0, vz: 0, h: BODY_HEIGHT, onGround: false, yaw: m.yaw || 0, pitch: -0.5,
-      alive: true, glide: true, hp: MAX_HP, shield: 0, kills: 0, canDouble: true, dashT: 0, dashCd: 0, dashX: 0, dashZ: 0, eye: EYE_HEIGHT };
-    const w = CLASSES[S.cls].weapon;
     S.points = 0; S.up = { dmg: 0, speed: 0, jump: 0, mag: 0 }; S.radarUntil = 0;
-    S.weapon = { ammo: magSize(), reloadEnd: 0, lastFire: 0 };
-    S.nades = CLASSES[S.cls].grenades.start; S.maxNades = CLASSES[S.cls].grenades.max; S.lastThrow = 0;
-    R.setViewmodel(S.cls);
-    $('crosshair').className = S.cls;
-    $('weaponName').textContent = `${CLASSES[S.cls].name} · ${w.name}`;
-    input.setAimButton(S.cls === 'melee' ? 'DASH' : S.cls === 'sniper' ? 'SCOPE' : 'AIM', S.cls !== 'melee');
-    $('deathScreen').classList.add('hidden');
-    if (touch) $('touch').classList.remove('hidden');
-    else if (!input.locked) $('clickToPlay').classList.remove('hidden');
+    spawnLocal(m.spawn, m.yaw, 0);
+    voice('start');
     flashCenter('Skydive! Steer to a good landing spot', `${THEMES[R.theme].name} · loot medkits, shields & grenades inside buildings`, 4);
   } else {
     S.me = null;
@@ -237,17 +272,69 @@ function onStart(m) {
   }
 }
 
+// Puts the local player into the world (match start or respawn).
+function spawnLocal([x, y, z], yaw, kills) {
+  S.me = { x, y, z, vx: 0, vy: 0, vz: 0, h: BODY_HEIGHT, onGround: false, yaw: yaw || 0, pitch: -0.5,
+    alive: true, glide: true, hp: MAX_HP, shield: 0, kills, canDouble: true, dashT: 0, dashCd: 0, dashX: 0, dashZ: 0,
+    eye: EYE_HEIGHT, lastDashAt: -9, slamming: false };
+  const w = CLASSES[S.cls].weapon;
+  S.weapon = { ammo: magSize(), reloadEnd: 0, lastFire: 0 };
+  S.nades = 0; S.maxNades = 0; S.lastThrow = 0; S.aimK = 0; S.respawnAt = 0;
+  R.setViewmodel(S.cls);
+  R.vmState.slamHold = false;
+  $('crosshair').className = S.cls;
+  $('weaponName').textContent = `${CLASSES[S.cls].name} · ${w.name}`;
+  input.setAimButton(S.cls === 'melee' ? 'DASH' : S.cls === 'sniper' ? 'SCOPE' : 'AIM', S.cls !== 'melee');
+  input.resetTouchToggles();
+  $('tKnife').classList.toggle('hidden', S.cls !== 'melee');
+  $('tNade').classList.toggle('hidden', S.settings.grenades === 'off');
+  $('deathScreen').classList.add('hidden');
+  if (touch) $('touch').classList.remove('hidden');
+  else if (!input.locked) $('clickToPlay').classList.remove('hidden');
+}
+
+function showRespawnBox() {
+  $('respawnBox').classList.remove('hidden');
+  const wrap = $('respawnClasses');
+  wrap.innerHTML = '';
+  for (const c of allowedClasses(S.settings)) {
+    const b = document.createElement('button');
+    b.className = 'mini-btn' + (c === S.cls ? ' sel' : '');
+    b.textContent = CLASSES[c].name;
+    b.onclick = (e) => {
+      e.stopPropagation();
+      S.cls = c; store.set('sr_cls', c);
+      send({ t: 'cfg', cls: c });
+      wrap.querySelectorAll('.mini-btn').forEach((n) => n.classList.toggle('sel', n === b));
+    };
+    wrap.appendChild(b);
+  }
+  $('respawnShop').disabled = !shopAvailable();
+}
+$('respawnShop').addEventListener('click', (e) => { e.stopPropagation(); openShop(); });
+
+function onRespawn(m) {
+  if (!S.inMatch) return;
+  if (CLASSES[m.cls]) S.cls = m.cls;
+  closeShop();
+  spawnLocal(m.spawn, m.yaw, S.me ? S.me.kills : 0);
+  S.livesLeft = m.lives;
+  voice('respawn');
+  flashCenter('Respawned!', m.lives >= 0 ? `${m.lives} respawn${m.lives === 1 ? '' : 's'} left` : 'Skydive back into the fight', 2.5);
+}
+
 // ------------------------------------------------------------------ snapshots & events
 function onSnap(m) {
-  S.zone = m.z; S.aliveCount = m.a; S.bountyId = m.b ?? null;
+  S.zone = m.z; S.aliveCount = m.a; S.bountyId = m.b ?? null; S.locked = !!m.lk;
   R.setZone(m.z);
   const seen = new Set();
   for (const e of m.p) {
-    const [id, x, y, z, yw, pt, cr, gl, alive, hp, sh, kills, sc] = e;
-    S.snap.set(id, { id, x, y, z, yaw: yw, pitch: pt, crouch: cr, glide: gl, alive, hp, shield: sh, kills });
+    const [id, x, y, z, yw, pt, cr, gl, alive, hp, sh, kills, sc, pend] = e;
+    S.snap.set(id, { id, x, y, z, yaw: yw, pitch: pt, crouch: cr, glide: gl, alive, hp, shield: sh, kills, pending: pend });
     seen.add(id);
     if (id === S.myId) {
-      if (S.me) { S.me.hp = hp; S.me.shield = sh; S.me.kills = kills; }
+      if (S.me && S.me.alive) { S.me.hp = hp; S.me.shield = sh; }
+      if (S.me) S.me.kills = kills;
       continue;
     }
     const info = S.info.get(id);
@@ -269,13 +356,15 @@ function onFx(m) {
     SFX.sfxShot(m.c, Math.max(0, 1 - d / (m.c === 'sniper' ? 450 : 220)) ** 1.5);
     const a = R.avatars.get(m.id); if (a) a.swingT = 0;
   } else if (m.k === 'swing') {
-    R.addSwing(m.id);
+    R.addSwing(m.id, m.v);
     const a = R.avatars.get(m.id);
-    if (a) SFX.sfxSwing(Math.max(0, 1 - a.pos.distanceTo(camPos()) / 30));
+    if (m.v === 'throw' && m.o && m.e) R.throwKnife(m.o, m.e);
+    if (m.v === 'slam' && a) { R.slamFx([a.pos.x, a.pos.y, a.pos.z]); SFX.sfxSlam(Math.max(0, 1 - a.pos.distanceTo(camPos()) / 40)); }
+    else if (a) SFX.sfxSwing(Math.max(0, 1 - a.pos.distanceTo(camPos()) / 30), m.v === 'finisher' ? 0.7 : m.v === 'backhand' ? 1.25 : 1);
   }
 }
 
-const WEAPON_ICON = { sniper: '🔭', rifle: '🔫', melee: '🔪', nade: '💣', zone: '☠️', left: '🚪' };
+const WEAPON_ICON = { sniper: '🔭', rifle: '🔫', melee: '🔪', throw: '🗡️', nade: '💣', zone: '☠️', left: '🚪' };
 function onKill(m) {
   const k = m.k != null ? S.info.get(m.k) : null, v = S.info.get(m.v);
   const va = R.avatars.get(m.v);
@@ -294,18 +383,32 @@ function onKill(m) {
   while ($('killfeed').children.length > 6) $('killfeed').lastChild.remove();
   if (m.k === S.myId && m.v !== S.myId) {
     SFX.sfxKill();
+    killVoice({ first: S.myKills === 0, weapon: m.w, headshot: m.hs });
+    S.myKills++;
     flashCenter(`Eliminated ${v ? esc(v.name) : ''}`, m.bounty ? '👑 BOUNTY CLAIMED! +150 🪙' : m.hs ? 'HEADSHOT!' : '', 2);
   } else if (m.bounty && k) banner(`👑 ${k.name} claimed the bounty on ${v ? v.name : '?'}`);
   if (m.v === S.myId && S.me) {
-    S.me.alive = false;
+    S.me.alive = false; S.me.hp = 0; S.me.shield = 0;
     closeShop();
     input.unlock();
+    voice('eliminated');
     $('clickToPlay').classList.add('hidden');
     $('touch').classList.add('hidden');
     $('deathScreen').classList.remove('hidden');
-    $('deathTitle').textContent = 'ELIMINATED';
-    $('deathSub').innerHTML = (m.w === 'zone' ? 'The zone got you.' : k ? `by ${nm(k)}` : m.w === 'nade' ? 'Oops, your own grenade.' : '') + ` — you placed <b>#${m.place}</b>`;
+    const by = m.w === 'zone' ? 'The zone got you.' : k ? `by ${nm(k)}` : m.w === 'nade' ? 'Oops, your own grenade.' : '';
+    if (m.respawn > 0) {
+      S.respawnAt = performance.now() / 1000 + m.respawn;
+      $('deathTitle').textContent = 'KNOCKED OUT';
+      $('deathSub').innerHTML = by + (m.lives >= 0 ? ` — ${m.lives} respawn${m.lives === 1 ? '' : 's'} left after this one` : '');
+      showRespawnBox();
+    } else {
+      S.respawnAt = 0;
+      $('deathTitle').textContent = 'ELIMINATED';
+      $('deathSub').innerHTML = by + ` — you placed <b>#${m.place}</b>`;
+      $('respawnBox').classList.add('hidden');
+    }
     R.setArc(null);
+    R.vmState.slamHold = false;
     S.specId = m.k != null && m.k !== S.myId ? m.k : null;
   }
 }
@@ -332,6 +435,7 @@ function onHitMarker(m) {
   h.className = 'show' + (m.kill ? ' kill' : m.head ? ' head' : '');
   SFX.sfxHit(m.head);
   if (m.back) flashCenter('BACKSTAB!', '', 1);
+  else if (m.kind && m.kind !== 'slash' && m.kind !== 'backhand') flashCenter({ finisher: 'FINISHER!', lunge: 'LUNGE!', slam: 'SLAM!', throw: 'KNIFE THROW!' }[m.kind], '', 0.8);
   const a = R.avatars.get(m.v);
   if (a) {
     const p = a.pos.clone(); p.y += m.head ? 1.7 : 1.1;
@@ -444,10 +548,11 @@ function onEnd(m) {
   S.phase = 'ended';
   closeShop();
   input.unlock();
-  ['clickToPlay', 'touch', 'deathScreen', 'scoreboard'].forEach((id) => $(id).classList.add('hidden'));
+  ['clickToPlay', 'touch', 'deathScreen', 'scoreboard', 'respawnBox'].forEach((id) => $(id).classList.add('hidden'));
+  S.respawnAt = 0;
   const me = m.winner === S.myId;
   $('endTitle').textContent = me ? '🏆 VICTORY ROYALE! 🏆' : m.name ? `🏆 ${m.name} wins!` : 'The bots win this round!';
-  if (me) SFX.sfxWin();
+  if (me) { SFX.sfxWin(); voice('victory'); }
   $('awards').innerHTML = (m.awards || []).map((a) =>
     `<div class="award"><div class="ai">${a.icon}</div><div class="at">${a.title}</div><div class="an" style="color:${a.color}">${esc(a.name)}</div><div class="av">${a.value}</div></div>`).join('');
   R.setArc(null);
@@ -511,7 +616,7 @@ function updateLocal(dt) {
     let dx = wx, dz = wz;
     if (Math.hypot(dx, dz) < 0.1) { dx = -sy; dz = -cy; }
     const L = Math.hypot(dx, dz); me.dashX = dx / L; me.dashZ = dz / L;
-    me.dashT = cls.dash.time; me.dashCd = cls.dash.cooldown;
+    me.dashT = cls.dash.time; me.dashCd = cls.dash.cooldown; me.lastDashAt = now;
     me.vy = Math.max(me.vy, 2.5);
     SFX.sfxDash();
   }
@@ -519,6 +624,14 @@ function updateLocal(dt) {
 
   const wasAir = !me.onGround, fallV = me.vy;
   stepBody(S.world, me, dt, me.glide ? GLIDE_FALL_SPEED : 0, gScale());
+  if (me.slamming && (me.onGround || me.glide)) {
+    me.slamming = false; R.vmState.slamHold = false;
+    if (me.onGround) {
+      send({ t: 'melee', k: 'slam' });
+      R.slamFx([me.x, me.y, me.z]); R.vmFire('melee', 'slam');
+      SFX.sfxSlam(1);
+    }
+  }
   if (me.onGround) {
     me.canDouble = true;
     if (me.glide) { me.glide = false; R.shake = 0.5; flashCenter('Landed!', 'Find loot and stay in the zone', 2); }
@@ -545,6 +658,12 @@ function updateLocal(dt) {
       send({ t: 'nade', o, v });
       SFX.sfxThrow(0.8);
     }
+  }
+
+  // knife throw
+  if (input.take('knifeThrow') && S.cls === 'melee' && !me.glide) {
+    if (now - S.lastKnifeThrow >= KNIFE.throw.cooldown) throwKnife(now);
+    else flashCenter('Knife coming back…', '', 0.6);
   }
 
   // weapon
@@ -627,13 +746,29 @@ function doShoot(now, moving) {
   if (S.weapon.ammo <= 0) startReload(now);
 }
 
+// Knife moveset: 3-hit combo (slash, backhand, spinning finisher), lunge right after a dash,
+// and a ground slam when attacking while falling.
 function doMelee(now) {
   const me = S.me, w = CLASSES.melee.weapon;
   S.weapon.lastFire = now;
-  R.vmFire('melee');
-  SFX.sfxSwing(0.8);
+  if (!me.onGround && me.vy < -KNIFE.slam.minFall && !me.slamming && now - S.lastSlam >= KNIFE.slam.cooldown) {
+    me.slamming = true; me.vy = -KNIFE.slam.speed; S.lastSlam = now;
+    R.vmState.slamHold = true;
+    SFX.sfxSwing(0.9, 0.6);
+    return;
+  }
+  let kind;
+  if (now - me.lastDashAt < KNIFE.lungeWindow) kind = 'lunge';
+  else {
+    S.combo = now - S.comboLast < KNIFE.comboWindow ? (S.combo + 1) % 3 : 0;
+    kind = ['slash', 'backhand', 'finisher'][S.combo];
+  }
+  S.comboLast = now;
+  R.vmFire('melee', kind);
+  SFX.sfxSwing(0.8, kind === 'finisher' ? 0.7 : kind === 'backhand' ? 1.25 : kind === 'lunge' ? 0.85 : 1);
   const fx = -Math.sin(me.yaw), fz = -Math.cos(me.yaw);
-  let best = null, bd = w.range + 0.4;
+  if (kind === 'lunge') { me.vx += fx * 6; me.vz += fz * 6; }
+  let best = null, bd = (kind === 'lunge' ? KNIFE.lungeRange : w.range) + 0.4;
   for (const [id, a] of R.avatars) {
     if (!a.root.visible) continue;
     const dx = a.pos.x - me.x, dy = a.pos.y - me.y, dz = a.pos.z - me.z;
@@ -644,7 +779,29 @@ function doMelee(now) {
     if (!lineOfSight(S.world, me.x, me.y + me.eye, me.z, a.pos.x, a.pos.y + 1.0, a.pos.z)) continue;
     best = id; bd = d;
   }
-  send({ t: 'melee', hit: best });
+  send({ t: 'melee', hit: best, k: kind });
+}
+
+function throwKnife(now) {
+  S.lastKnifeThrow = now;
+  R.camera.getWorldDirection(fwd);
+  const o = R.camera.position;
+  let best = S.world.raycast(o.x, o.y, o.z, fwd.x, fwd.y, fwd.z, KNIFE.throw.range);
+  let hit = null;
+  for (const [id, a] of R.avatars) {
+    const p = a.pos;
+    const th = raySphere(o.x, o.y, o.z, fwd.x, fwd.y, fwd.z, p.x, p.y + (a.crouch ? 1.15 : 1.6), p.z, 0.3);
+    if (th >= 0 && th < best) { best = th; hit = id; }
+    const tb = rayBox(o.x, o.y, o.z, fwd.x, fwd.y, fwd.z, { x0: p.x - 0.4, y0: p.y, z0: p.z - 0.4, x1: p.x + 0.4, y1: p.y + (a.crouch ? 1.0 : 1.42), z1: p.z + 0.4 });
+    if (tb >= 0 && tb < best) { best = tb; hit = id; }
+  }
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const start = o.clone().addScaledVector(fwd, 0.6).add(new THREE.Vector3(0, -0.1, 0));
+  const end = o.clone().addScaledVector(fwd, best);
+  send({ t: 'melee', k: 'throw', hit, o: start.toArray().map(r2), e: end.toArray().map(r2) });
+  R.throwKnife(start.toArray(), end.toArray());
+  R.vmFire('melee', 'throw');
+  SFX.sfxThrow(0.9);
 }
 
 // ------------------------------------------------------------------ spectating
@@ -656,6 +813,13 @@ function nextSpecTarget(after) {
 }
 
 function updateSpectator(dt) {
+  if (S.respawnAt) {
+    const left = Math.max(0, S.respawnAt - performance.now() / 1000);
+    $('respawnTimer').textContent = left > 0.05 ? `Respawning in ${Math.ceil(left)}…` : 'Respawning…';
+    // the shop works while you wait (upgrades only)
+    if (input.take('shop')) S.shopOpen ? closeShop() : openShop();
+    if (S.shopOpen) for (let i = 1; i <= SHOP_ITEMS.length; i++) if (input.take('buy' + i)) buy(SHOP_ITEMS[i - 1].id);
+  }
   if (input.take('tap')) S.specId = nextSpecTarget(S.specId);
   const a = S.specId != null ? R.avatars.get(S.specId) : null;
   if (!a) {
@@ -718,21 +882,29 @@ function onPoints(m) {
   renderShop();
 }
 
+const itemCost = (it) => Math.round(it.cost * S.settings.prices);
+function shopAvailable() {
+  return S.inMatch && S.phase === 'playing' && S.settings.shop !== 'off' && !S.locked && S.me && (S.me.alive || S.respawnAt > 0);
+}
+
 function renderShop() {
   if (!S.shopOpen) return;
   $('shopPts').textContent = `🪙 ${S.points}`;
+  const dead = !S.me || !S.me.alive;
   const wrap = $('shopItems');
   wrap.innerHTML = '';
   SHOP_ITEMS.forEach((it, i) => {
     const lvl = S.up[it.id] || 0;
     const maxed = it.max && lvl >= it.max;
-    const blocked = it.notFor === S.cls;
+    const blocked = it.notFor === S.cls || (it.id === 'nade' && S.settings.grenades === 'off');
+    const needsAlive = dead && SHOP_NEEDS_ALIVE.includes(it.id);
+    const cost = itemCost(it);
     const b = document.createElement('button');
     b.className = 'shop-item';
-    b.disabled = maxed || blocked || S.points < it.cost;
+    b.disabled = maxed || blocked || needsAlive || S.points < cost;
     b.innerHTML = `<span class="key">${touch ? '' : i + 1}</span>${it.max ? `<span class="lvl">${lvl}/${it.max}</span>` : ''}` +
-      `<div class="ic">${it.icon}</div><div class="nm">${it.name}</div><div class="ds">${blocked ? 'Not for your class' : it.desc}</div>` +
-      `<div class="cost">${maxed ? 'MAXED' : `🪙 ${it.cost}`}</div>`;
+      `<div class="ic">${it.icon}</div><div class="nm">${it.name}</div><div class="ds">${blocked ? 'Not available' : needsAlive ? 'Buy after you respawn' : it.desc}</div>` +
+      `<div class="cost">${maxed ? 'MAXED' : `🪙 ${cost}`}</div>`;
     b.addEventListener('click', () => buy(it.id));
     wrap.appendChild(b);
   });
@@ -741,7 +913,10 @@ function renderShop() {
 function buy(id) { send({ t: 'buy', item: id }); }
 
 function openShop() {
-  if (!S.me || !S.me.alive) return;
+  if (!shopAvailable()) {
+    if (S.inMatch && S.me) flashCenter(S.settings.shop === 'off' ? 'Shop is off' : S.locked ? '🔒 Shop closed' : 'Shop unavailable', S.locked ? 'No shopping in the final circles' : '', 1.5);
+    return;
+  }
   S.shopOpen = true;
   $('shopMsg').textContent = '';
   input.fire = false;
@@ -755,7 +930,7 @@ function closeShop() {
   if (!S.shopOpen) return;
   S.shopOpen = false;
   $('shop').classList.add('hidden');
-  if (!touch && S.phase === 'playing' && S.me && S.me.alive) $('clickToPlay').classList.remove('hidden');
+  if (!touch && S.phase === 'playing' && S.me && S.me.alive && !input.locked) $('clickToPlay').classList.remove('hidden');
 }
 $('shopClose').addEventListener('click', closeShop);
 window.addEventListener('keydown', (e) => { if (e.code === 'Escape') closeShop(); });
@@ -872,8 +1047,12 @@ function updateHud(dt) {
     const w = CLASSES[S.cls].weapon;
     const now = performance.now() / 1000;
     setText('ammo', S.cls === 'melee' ? '∞' : S.weapon.reloadEnd > now ? 'Reloading…' : `${S.weapon.ammo} / ${magSize()}`);
-    setText('ability', S.cls === 'melee' ? (me.dashCd > 0 ? `Dash ${me.dashCd.toFixed(1)}s` : 'Dash ready [E]') : '');
-    setText('nadeCount', `💣 ${S.nades} / ${S.maxNades}${touch ? '' : '  [G]'}`);
+    if (S.cls === 'melee') {
+      const thr = KNIFE.throw.cooldown - (now - S.lastKnifeThrow);
+      setText('ability', `${me.dashCd > 0 ? `Dash ${me.dashCd.toFixed(1)}s` : `Dash ✓${touch ? '' : ' [E]'}`} · ${thr > 0 ? `Throw ${thr.toFixed(1)}s` : `Throw ✓${touch ? '' : ' [F]'}`}${S.combo > 0 && now - S.comboLast < KNIFE.comboWindow ? ` · Combo ${S.combo + 1}/3` : ''}`);
+    } else setText('ability', '');
+    setText('nadeCount', S.maxNades ? `💣 ${S.nades} / ${S.maxNades}${touch ? '' : '  [G]'}` : '');
+    $('tShop').classList.toggle('hidden', !shopAvailable());
     $('nadeCount').classList.toggle('empty', S.nades <= 0);
     const outside = z && me.alive && !me.glide && Math.hypot(me.x - z.cx, me.z - z.cz) > z.r;
     $('zoneVignette').classList.toggle('on', !!outside);
@@ -904,7 +1083,7 @@ function updateHud(dt) {
     const rows = [...S.snap.values()].sort((a, b) => b.alive - a.alive || b.kills - a.kills);
     $('scoreTable').innerHTML = '<tr><th>Player</th><th>Class</th><th>Kills</th><th></th></tr>' + rows.map((p) => {
       const i = S.info.get(p.id) || { name: '?', cls: 'rifle', color: '#fff' };
-      return `<tr class="${p.alive ? '' : 'dead'}"><td><span class="swatch" style="background:${i.color}"></span>${esc(i.name)}${p.id === S.myId ? ' (you)' : ''}</td><td>${CLASSES[i.cls].name}</td><td>${p.kills}</td><td>${p.alive ? '' : '💀'}</td></tr>`;
+      return `<tr class="${p.alive ? '' : 'dead'}"><td><span class="swatch" style="background:${i.color}"></span>${esc(i.name)}${p.id === S.myId ? ' (you)' : ''}</td><td>${CLASSES[i.cls].name}</td><td>${p.kills}</td><td>${p.alive ? '' : p.pending ? '⏳' : '💀'}</td></tr>`;
     }).join('');
   } else sb.classList.add('hidden');
 }

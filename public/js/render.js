@@ -67,6 +67,7 @@ export class Renderer {
     this.particles = [];
     this.pickupMeshes = new Map();
     this.nadeMeshes = new Map();
+    this.projectiles = [];
     this.time = 0;
     this.shake = 0;
 
@@ -392,7 +393,20 @@ export class Renderer {
       a.body.scale.y = a.crouch ? 0.72 : 1;
       a.body.position.y = speed > 0.5 ? Math.abs(Math.sin(a.walk)) * 0.05 : 0;
       a.chute.visible = !!a.glide;
-      if (a.swingT > 0) { a.swingT -= dt; a.gun.rotation.x = -Math.sin((1 - a.swingT / 0.25) * Math.PI) * 1.2; } else a.gun.rotation.x = -a.pitch * 0.8;
+      a.gun.rotation.set(-a.pitch * 0.8, 0, 0);
+      a.gun.position.z = -0.25;
+      if (a.swingT > 0) {
+        a.swingT -= dt;
+        const prog = 1 - a.swingT / 0.25, sw = Math.sin(prog * Math.PI);
+        switch (a.swingKind) {
+          case 'backhand': a.gun.rotation.y = sw * 1.4; break;
+          case 'finisher': a.gun.rotation.z = prog * Math.PI * 2; a.gun.rotation.x = -sw * 0.8; break;
+          case 'lunge': a.gun.position.z = -0.25 - sw * 0.5; break;
+          case 'slam': a.gun.rotation.x = sw * 1.6; break;
+          case 'throw': a.gun.rotation.x = -sw * 1.8; break;
+          default: a.gun.rotation.x = -sw * 1.2;
+        }
+      }
       a.crown.visible = !!a.bounty;
       if (a.bounty) a.crown.position.y = 2.75 + Math.sin(this.time * 3) * 0.08;
       // sniper scope glint: stays the same size on screen so it can be spotted from far away
@@ -487,7 +501,32 @@ export class Renderer {
     this.effects.push({ obj: m, life, max: life, fade: true, grow: 3 });
   }
 
-  addSwing(id) { const a = this.avatars.get(id); if (a) a.swingT = 0.25; }
+  addSwing(id, kind = 'slash') { const a = this.avatars.get(id); if (a) { a.swingT = 0.25; a.swingKind = kind; } }
+
+  // A spinning knife flying from o to e.
+  throwKnife(o, e) {
+    const from = new THREE.Vector3(...o), to = new THREE.Vector3(...e);
+    const g = new THREE.Group();
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.06, 0.32), new THREE.MeshBasicMaterial({ color: 0xe0f7ff }));
+    const glow = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.09, 0.36), new THREE.MeshBasicMaterial({ color: 0xff3c8e, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+    g.add(blade, glow);
+    g.position.copy(from);
+    g.lookAt(to);
+    this.scene.add(g);
+    this.projectiles.push({ obj: g, from, to, t: 0, dur: Math.max(0.05, from.distanceTo(to) / 45) });
+  }
+
+  // Shockwave where a knife ground-slam lands.
+  slamFx(pos) {
+    const p = new THREE.Vector3(...pos);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.6, 1, 40), new THREE.MeshBasicMaterial({ color: 0xff3c8e, transparent: true, side: THREE.DoubleSide, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2; ring.position.copy(p); ring.position.y += 0.1;
+    this.scene.add(ring);
+    this.effects.push({ obj: ring, life: 0.45, max: 0.45, fade: true, grow: 3.4 });
+    this.burst(p.clone().add(new THREE.Vector3(0, 0.3, 0)), [0xff3c8e, 0xffffff, 0xb388ff], 30, 6, 0.8, 0.2);
+    const d = p.distanceTo(this.camera.position);
+    this.shake = Math.max(this.shake, Math.max(0, 1 - d / 15) * 0.6);
+  }
 
   // Colourful particle burst (confetti, sparks, debris).
   burst(pos, colors, count = 30, speed = 6, life = 1.2, size = 0.22, gravity = 14) {
@@ -564,11 +603,25 @@ export class Renderer {
       }
     }
     this.boomLight.intensity = Math.max(0, this.boomLight.intensity - dt * 220);
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const P = this.projectiles[i];
+      P.t += dt;
+      const k = Math.min(1, P.t / P.dur);
+      P.obj.position.lerpVectors(P.from, P.to, k);
+      P.obj.children[0].rotation.x += dt * 30; P.obj.children[1].rotation.x = P.obj.children[0].rotation.x;
+      if (k >= 1) {
+        this.scene.remove(P.obj);
+        P.obj.traverse((o) => { if (o.geometry) { o.geometry.dispose(); o.material.dispose(); } });
+        this.addPuff(P.to, 0xff8fd8, 0.15, 0.25);
+        this.projectiles.splice(i, 1);
+      }
+    }
   }
 
   clearEffects() {
     for (const e of [...this.effects, ...this.particles]) { this.scene.remove(e.obj); e.obj.geometry.dispose(); e.obj.material.dispose(); }
-    this.effects = []; this.particles = [];
+    for (const P of this.projectiles) this.scene.remove(P.obj);
+    this.effects = []; this.particles = []; this.projectiles = [];
   }
 
   // world position -> CSS pixel coordinates (or null if behind the camera)
@@ -620,7 +673,7 @@ export class Renderer {
     this.flash = new THREE.Mesh(new THREE.IcosahedronGeometry(0.06, 0), new THREE.MeshBasicMaterial({ color: 0xfff3b0 }));
     this.flash.visible = false;
     this.vmScene.add(this.flash);
-    this.vmState = { kick: 0, swing: 0, bob: 0, flashT: 0, cls: null };
+    this.vmState = { kick: 0, swing: 0, bob: 0, flashT: 0, cls: null, kind: 'slash', slamHold: false };
   }
 
   setViewmodel(cls) {
@@ -628,8 +681,8 @@ export class Renderer {
     this.vmState.cls = cls;
   }
 
-  vmFire(cls) {
-    if (cls === 'melee') this.vmState.swing = 1;
+  vmFire(cls, kind = 'slash') {
+    if (cls === 'melee') { this.vmState.swing = 1; this.vmState.kind = kind; }
     else { this.vmState.kick = 1; this.vmState.flashT = 0.05; }
   }
 
@@ -639,7 +692,7 @@ export class Renderer {
     if (!g) return;
     g.visible = visible;
     st.kick = Math.max(0, st.kick - dt * 8);
-    st.swing = Math.max(0, st.swing - dt * 4);
+    st.swing = Math.max(0, st.swing - dt * (st.kind === 'finisher' ? 3 : 4));
     st.bob += dt * (moving ? 9 : 2);
     const bobA = moving ? 0.012 : 0.004;
     const hip = { x: 0.2, y: -0.19, z: -0.42 }, aim = { x: 0, y: cls === 'sniper' ? -0.09 : -0.115, z: -0.36 };
@@ -648,8 +701,18 @@ export class Renderer {
     g.position.set(x + Math.cos(st.bob) * bobA, y + Math.abs(Math.sin(st.bob)) * bobA - reloadK * 0.25 - (nadeAim ? 0.08 : 0), z + st.kick * 0.07);
     g.rotation.x = st.kick * 0.12 - reloadK * 0.9;
     if (cls === 'melee') {
-      const s = Math.sin(st.swing * Math.PI);
-      g.rotation.x = -s * 1.1; g.rotation.z = s * 0.6; g.position.x -= s * 0.15; g.position.z -= s * 0.15;
+      // each knife move has its own animation
+      const prog = 1 - st.swing, s = Math.sin(st.swing * Math.PI);
+      g.rotation.y = 0.2; g.rotation.z = 0;
+      switch (st.kind) {
+        case 'backhand': g.rotation.y = 0.2 - s * 1.5; g.rotation.z = -s * 0.5; g.position.x -= s * 0.28; g.position.y += s * 0.04; break;
+        case 'finisher': g.rotation.z = st.swing > 0 ? -prog * Math.PI * 2 : 0; g.rotation.x = -s * 0.6; g.position.x -= s * 0.12; g.position.z -= s * 0.25; break;
+        case 'lunge': g.rotation.x = s * 0.15; g.position.z -= s * 0.38; g.position.x -= s * 0.14; break;
+        case 'slam': g.rotation.x = s * 1.5; g.position.y += s * 0.12; break;
+        case 'throw': g.rotation.x = -s * 1.3; g.position.z -= s * 0.25; g.visible = visible && (st.swing < 0.15 || st.swing > 0.75); break;
+        default: g.rotation.x = -s * 1.1; g.rotation.z = s * 0.6; g.position.x -= s * 0.15; g.position.z -= s * 0.15;
+      }
+      if (st.slamHold) { g.rotation.x = 1.4; g.position.y += 0.1; } // knife raised while diving down
     }
     this.vmNade.visible = visible && nadeAim;
     if (nadeAim) this.vmNade.position.set(-0.24, -0.19 + Math.sin(this.time * 6) * 0.004, -0.55);

@@ -160,3 +160,45 @@ export const BOT_SKILL = {
 
 export const SUPPLY_DROP_EVERY = 75; // seconds between supply drops
 export const DROP_FALL_SPEED = 6;
+
+// ---------- knife moveset ----------
+export const KNIFE = {
+  comboWindow: 0.9,      // seconds between swings to keep a combo going
+  finisherMult: 1.35,    // 3rd hit of a combo
+  lungeMult: 1.4,        // attack right after a dash
+  lungeWindow: 0.45,
+  lungeRange: 4.2,
+  slam: { damage: 50, radius: 3.4, minFall: 5, cooldown: 1.5, speed: 26 }, // attack while falling: ground slam
+  throw: { damage: 40, range: 32, cooldown: 4 },                           // F / 🗡️ button
+};
+
+// ---------- respawns ----------
+export const RESPAWN_DROP_HEIGHT = 70;
+// Shop items that only make sense while you're alive (upgrades can be bought while waiting to respawn).
+export const SHOP_NEEDS_ALIVE = ['med', 'shield', 'bigshield', 'nade', 'radar'];
+
+// ---------- host settings (lobby) ----------
+// Each setting is a dropdown; the host picks an option and the server validates it against this list.
+const ONOFF = [['on', 'On'], ['off', 'Off']];
+export const SETTINGS = [
+  { key: 'respawn', group: 'Respawns', label: 'Respawns', def: 'on', options: ONOFF },
+  { key: 'respawnDelay', group: 'Respawns', label: 'Respawn delay', def: 6, options: [[3, '3 s'], [6, '6 s'], [10, '10 s'], [15, '15 s']] },
+  { key: 'lives', group: 'Respawns', label: 'Respawns per player', def: 0, options: [[0, 'Unlimited'], [1, '1'], [2, '2'], [3, '3'], [5, '5']] },
+  { key: 'lockCircles', group: 'Respawns', label: 'No respawns / shop in final', def: 2, options: [[1, '1 circle'], [2, '2 circles'], [3, '3 circles']] },
+  { key: 'shop', group: 'Shop', label: 'Shop', def: 'on', options: ONOFF },
+  { key: 'prices', group: 'Shop', label: 'Shop prices', def: 1, options: [[0.5, 'Half price'], [1, 'Normal'], [1.5, '×1.5'], [2, '×2']] },
+  { key: 'pointsMult', group: 'Shop', label: 'Points earned', def: 1, options: [[0.5, '×0.5'], [1, 'Normal'], [2, '×2'], [3, '×3']] },
+  { key: 'dmg', group: 'Combat', label: 'Weapon damage', def: 1, options: [[0.75, '×0.75'], [1, 'Normal'], [1.25, '×1.25'], [1.5, '×1.5']] },
+  { key: 'startShield', group: 'Combat', label: 'Bonus starting shield', def: 0, options: [[0, 'None'], [50, '+50'], [100, '+100']] },
+  { key: 'grenades', group: 'Combat', label: 'Grenades', def: 'normal', options: [['off', 'Off'], ['normal', 'Normal'], ['double', 'Double']] },
+  { key: 'sniper', group: 'Classes', label: 'Sniper allowed', def: 'on', options: ONOFF },
+  { key: 'rifle', group: 'Classes', label: 'Rifle allowed', def: 'on', options: ONOFF },
+  { key: 'melee', group: 'Classes', label: 'Melee allowed', def: 'on', options: ONOFF },
+  { key: 'zoneSpeed', group: 'Zone', label: 'Zone speed', def: 1, options: [[0.6, 'Slow'], [1, 'Normal'], [1.5, 'Fast']] },
+  { key: 'zoneDmg', group: 'Zone', label: 'Zone damage', def: 1, options: [[0.5, 'Low'], [1, 'Normal'], [2, 'High']] },
+  { key: 'loot', group: 'World', label: 'Loot amount', def: 140, options: [[80, 'Low'], [140, 'Normal'], [220, 'High']] },
+  { key: 'drops', group: 'World', label: 'Supply drops', def: 75, options: [[0, 'Off'], [45, 'Every 45 s'], [75, 'Every 75 s'], [120, 'Every 2 min']] },
+  { key: 'bounty', group: 'World', label: 'Bounty on kill leader', def: 'on', options: ONOFF },
+];
+export const defaultSettings = () => Object.fromEntries(SETTINGS.map((s) => [s.key, s.def]));
+export const allowedClasses = (set) => Object.keys(CLASSES).filter((c) => set[c] !== 'off');

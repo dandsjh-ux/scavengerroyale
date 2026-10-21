@@ -41,7 +41,8 @@ export function sfxShot(cls, vol = 1) {
   if (cls === 'sniper') { noise(0.5, 1800, 0.7, 0.9 * vol, 'lowpass', 200); tone(90, 0.35, 0.6 * vol, 'sine', 40); }
   else { noise(0.12, 3000, 0.8, 0.45 * vol, 'lowpass', 600); tone(180, 0.08, 0.2 * vol, 'square', 70); }
 }
-export function sfxSwing(vol = 1) { if (vol > 0.02) noise(0.18, 900, 2, 0.35 * vol, 'bandpass', 3500); }
+export function sfxSwing(vol = 1, pitch = 1) { if (vol > 0.02) noise(0.18 / pitch, 900 * pitch, 2, 0.35 * vol, 'bandpass', 3500 * pitch); }
+export function sfxSlam(vol = 1) { noise(0.5, 500, 0.8, 0.8 * vol, 'lowpass', 80); tone(110, 0.3, 0.5 * vol, 'sine', 45); }
 export function sfxHit(head) { tone(head ? 1500 : 1100, 0.07, 0.25, 'triangle'); if (head) tone(1900, 0.08, 0.2, 'triangle', 0, 0.06); }
 export function sfxKill() { [660, 880, 1320].forEach((f, i) => tone(f, 0.15, 0.22, 'triangle', 0, i * 0.07)); }
 export function sfxHurt() { tone(160, 0.2, 0.4, 'sawtooth', 60); }
@@ -55,3 +56,29 @@ export function sfxStep(vol = 0.06) { noise(0.06, 500, 1, vol, 'lowpass'); }
 export function sfxBoom(vol = 1) { noise(1.1, 900, 0.6, 1.0 * vol, 'lowpass', 60); tone(70, 0.6, 0.8 * vol, 'sine', 30); }
 export function sfxThrow(vol = 1) { if (vol > 0.02) noise(0.2, 600, 1.5, 0.25 * vol, 'bandpass', 1800); }
 export function sfxDrop() { [392, 523, 659, 784].forEach((f, i) => tone(f, 0.18, 0.18, 'square', 0, i * 0.09)); }
+
+// ---------- recorded voice lines ----------
+const voiceCache = new Map();
+let voiceSrc = null, voiceGain = null, voiceVolume = 0.9;
+export function setVoiceVolume(v) { voiceVolume = v; if (voiceGain) voiceGain.gain.value = v; }
+function loadVoice(url) {
+  if (!voiceCache.has(url)) {
+    voiceCache.set(url, fetch(url).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
+      .then((a) => ctx.decodeAudioData(a)).catch(() => null));
+  }
+  return voiceCache.get(url);
+}
+export function preloadVoices(urls) { if (ctx) urls.forEach(loadVoice); }
+// Plays one line at a time: a new line cuts off the previous one.
+export async function playVoice(url) {
+  if (!ctx || voiceVolume <= 0) return;
+  const buf = await loadVoice(url);
+  if (!buf) return;
+  if (!voiceGain) { voiceGain = ctx.createGain(); voiceGain.connect(ctx.destination); }
+  voiceGain.gain.value = voiceVolume;
+  if (voiceSrc) { try { voiceSrc.stop(); } catch { /* already ended */ } }
+  voiceSrc = ctx.createBufferSource();
+  voiceSrc.buffer = buf;
+  voiceSrc.connect(voiceGain);
+  voiceSrc.start();
+}

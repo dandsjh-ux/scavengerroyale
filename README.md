@@ -3,7 +3,8 @@
 A bright, colourful first-person **battle royale** for up to **8 players on your local network** (LAN / home Wi-Fi), built with three.js. It runs on keyboard and mouse or on a tablet's touch screen.
 
 - **Big procedural city**: a 360 m island with roads, parks, warehouses and towers, plus about 90 buildings with **interiors you can enter**. Buildings have stairs, several floors, rooms, windows and roofs to camp on. Every match gets a new layout.
-- **Skydive start**: everyone parachutes in and picks their own landing spot.
+- **Skydive start**: everyone parachutes in and picks their own landing spot. You can't be hurt while skydiving.
+- **Respawns**: when you're knocked out you skydive back into the zone after a short countdown. You can switch class and shop for upgrades while you wait. Respawns stop in the **final two circles** (adjustable), and from then on eliminations are final.
 - **Slowly shrinking zone**: six phases, about 10 minutes in total. The next circle is shown on the minimap, and standing outside it hurts more each phase.
 - **Loot**: medkits ❤, shields 🛡 and grenades 💣 are scattered through the buildings, along with coins 🪙 and gems 💎 to collect.
 - **Grenades 💣**: hold **G** (or the 💣 button on a tablet) to see the throw arc and blast radius, then release to throw. They bounce off walls, explode after 2.4 s and knock players back. Walls block the blast. The server simulates every grenade, so all players see the same bounces.
@@ -20,14 +21,14 @@ A bright, colourful first-person **battle royale** for up to **8 players on your
   - 🎯 **Headhunters**: bigger headshots
 - **Time of day**: each map has its own look (Sunny Noon, Golden Hour, Candy Sunset or Fresh Morning), with a gradient sky, sun, animated water and drifting clouds.
 - **End-of-match awards** (Damage Dealer, Longest Shot, Scavenger King, Demolition) and a **session leaderboard** of wins and kills in the lobby.
-- **Points & shop 🛒**: you earn points from **kills (+100)** and from **scavenging** (coins +20, gems +50, any other loot +10). Spend them at any time in the shop (**B** key, or the 🛒 button on a tablet). It sells medkits, shield cells, Mega Shield, grenades, Power Core (+20% damage), Turbo Shoes (+12% speed), Spring Boots (+30% jump), Extended Mag (+50% magazine) and Radar Ping (shows every enemy on your minimap for 12 s). Points and upgrades reset each match. The server checks every purchase.
+- **Points & shop 🛒**: you earn points from **kills (+100)** and from **scavenging** (coins +20, gems +50, any other loot +10). Spend them in the shop at any time (**B** key, or the 🛒 button on a tablet), even while waiting to respawn (upgrades only). The shop **closes in the final two circles**. It sells medkits, shield cells, Mega Shield, grenades, Power Core (+20% damage), Turbo Shoes (+12% speed), Spring Boots (+30% jump), Extended Mag (+50% magazine) and Radar Ping (shows every enemy on your minimap for 12 s). Points and upgrades reset each match. The server checks every purchase.
 - **Three classes**
 
 | Class | Speed | Weapon | Passive | Grenades (start / max) |
 |---|---|---|---|---|
 | 🔭 **Sniper** | Slow | Bolt-action, 95 dmg, about 2.6× on a headshot. Right-click to scope; very inaccurate unscoped. | **Spotter**: enemies you hit show on your minimap for 6 s. Your scope **glints** while aimed, so others can spot you. | 1 / 2 |
 | 🔫 **Rifle** | Medium | Full-auto, 30-round mag, damage falloff past about 55 m. Spread grows during long sprays, so fire in bursts. | **Armored**: starts with 50 shield. | 2 / 3 |
-| 🔪 **Melee** | Very fast | Knife, 55 dmg. **Double jump** and **dash** (E or right-click). A **backstab does double**. | **Lifesteal** of +15 HP per hit, takes 15% less damage. | **3 / 6** |
+| 🔪 **Melee** | Very fast | Knife, 55 dmg. **Double jump** and **dash** (E or right-click). A **backstab does double**. Moveset: slash, backhand, then a spinning **finisher** (+35%); attack right after a dash to **lunge** (+40%, longer reach); attack while falling to **ground-slam** (area damage); **F** throws the knife (40 dmg, 4 s cooldown). | **Lifesteal** of +15 HP per hit, takes 15% less damage. | **3 / 6** |
 
 - **Bots** (optional, with Easy, Normal or Hard difficulty) fill empty slots so you can play with only 2 or 3 people, or practise alone. They fight, roam inside the zone and throw grenades.
 
@@ -51,6 +52,31 @@ The launchers check for **Node.js** (version 18 or newer) and try to install it 
 
 Friends connect to the same Wi-Fi or LAN and open the address shown in the lobby (for example `http://192.168.1.23:3000`) in **Chrome, Edge, Firefox or Safari**. On a tablet, touch controls turn on by themselves. The first person to join (normally the host laptop) is the **host 👑**. The host picks the number of bots, the bot difficulty and the mutator, then presses **START MATCH**. Anyone who joins during a match watches as a spectator and plays in the next round.
 
+## ⚙ Host settings
+
+The host (👑, the first person in the lobby) sets up each match from the lobby. Everyone else sees the settings, but only the host can change them. They're saved to `settings.json` next to the server, so they stay the same next time.
+
+| Group | Settings |
+|---|---|
+| Players | Number of bots, bot difficulty, mutator |
+| Respawns | On/off, respawn delay (3–15 s), respawns per player (unlimited or 1–5), how many final circles have no respawns or shop (1–3) |
+| Shop | On/off, prices (half to ×2), points earned (×0.5 to ×3) |
+| Combat | Weapon damage, bonus starting shield, grenades (off / normal / double) |
+| Classes | Allow or ban Sniper, Rifle or Melee |
+| Zone | Zone speed, zone damage |
+| World | Loot amount, supply drop frequency (or off), bounty on/off |
+
+## 🔊 Voice lines
+
+The recorded lines in [`public/voice/`](public/voice) play for:
+- the match start and respawns
+- your first kill
+- headshots, grenade kills, knife kills, sniper kills and ordinary kills
+- your own elimination
+- a victory
+
+Each moment picks one of its takes at random. A **🔊 Voice** volume slider is in the lobby next to your name. To add or swap takes, put the files in `public/voice/` and list them in [`public/js/voice.js`](public/js/voice.js).
+
 ## 🎮 Controls
 
 | | Keyboard + mouse | Tablet |
@@ -60,6 +86,7 @@ Friends connect to the same Wi-Fi or LAN and open the address shown in the lobby
 | Shoot / stab | Left click | Hold **FIRE** (you can drag while holding it to aim) |
 | Aim / scope | Right click (hold) | **AIM** (toggle) |
 | Melee dash | E or right click | **DASH** |
+| Knife throw (Melee) | F | **🗡️** |
 | Jump / double jump | Space | **JUMP** |
 | Crouch | C or Ctrl | **CROUCH** (toggle) |
 | Sprint | Shift | Push the stick fully |
