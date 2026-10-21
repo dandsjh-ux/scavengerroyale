@@ -23,7 +23,9 @@ export const CLASSES = {
   sniper: {
     name: 'Sniper',
     desc: 'Slow, but deadly from across the map. Right-click to scope.',
+    passive: 'Spotter: enemies you hit appear on your minimap for 6 s. Careful, your scope glints!',
     speed: 5.0,
+    grenades: { start: 1, max: 2 },
     jump: 7.0,
     color: '#8e5cff',
     weapon: {
@@ -36,20 +38,27 @@ export const CLASSES = {
   rifle: {
     name: 'Rifle',
     desc: 'All-rounder. Full-auto, best at medium range. Right-click to aim.',
+    passive: 'Armored: starts every match with 50 shield. Fire in bursts to stay accurate.',
     speed: 6.6,
+    startShield: 50,
+    grenades: { start: 2, max: 3 },
     jump: 7.2,
     color: '#ff8a1f',
     weapon: {
       name: 'Blaster AR', damage: 18, headMult: 1.8, rate: 0.1, range: 220,
       falloffStart: 55, mag: 30, reload: 1.9, spreadHip: 0.032, spreadAim: 0.009,
-      auto: true, zoomFov: 50, recoil: 0.012,
+      auto: true, zoomFov: 50, recoil: 0.012, bloom: 0.0045, bloomMax: 0.03,
     },
     stats: { speed: 3, range: 3, damage: 3 },
   },
   melee: {
     name: 'Melee',
     desc: 'Knife. Very fast, double jump + dash (E / right-click). Backstabs do double.',
+    passive: 'Lifesteal +15 HP per hit, takes 15% less damage, carries the most grenades.',
     speed: 9.6,
+    lifesteal: 15,
+    resist: 0.85,
+    grenades: { start: 3, max: 6 },
     jump: 8.0,
     color: '#ff3c8e',
     doubleJump: true,
@@ -99,7 +108,7 @@ export const SHIELD_GAIN = 50;
 
 // ---------- points & shop ----------
 // Points ("coins") come from kills and from scavenging valuables found inside buildings.
-export const POINTS = { kill: 100, coin: 20, gem: 50, loot: 10 };
+export const POINTS = { kill: 100, coin: 20, gem: 50, loot: 10, drop: 150, bounty: 150 };
 
 export const SHOP_ITEMS = [
   { id: 'med', name: 'Medkit', icon: '❤️', desc: '+40 health', cost: 60 },
@@ -110,6 +119,44 @@ export const SHOP_ITEMS = [
   { id: 'jump', name: 'Spring Boots', icon: '🦘', desc: '+30% jump height', cost: 100, max: 1 },
   { id: 'mag', name: 'Extended Mag', icon: '📦', desc: '+50% magazine size', cost: 120, max: 1, notFor: 'melee' },
   { id: 'radar', name: 'Radar Ping', icon: '📡', desc: 'All enemies on your minimap for 12 s', cost: 120 },
+  { id: 'nade', name: 'Grenade', icon: '💣', desc: '+1 grenade (up to your class max)', cost: 50 },
 ];
 export const DMG_UPGRADE = 0.2, SPEED_UPGRADE = 0.12, JUMP_UPGRADE = 0.3, MAG_UPGRADE = 0.5;
 export const RADAR_TIME = 12;
+
+// ---------- grenades ----------
+export const GRENADE = {
+  fuse: 2.4,          // seconds from throw to explosion
+  radius: 7.5,        // blast radius (m)
+  maxDamage: 100,     // at the centre
+  minDamage: 15,      // at the edge
+  selfMult: 0.5,      // your own grenades hurt you less
+  speed: 18,          // throw speed
+  lift: 3.5,          // extra upward velocity on throw
+  bounce: 0.4,
+  friction: 0.7,
+  r: 0.15,
+  cooldown: 0.8,
+};
+
+// ---------- match mutators (host picks one, or random) ----------
+export const MUTATORS = {
+  classic: { name: 'Classic', icon: '⭐', desc: 'Standard rules.' },
+  moon: { name: 'Moon Jump', icon: '🌙', desc: 'Low gravity: huge jumps and floaty grenades.', gravity: 0.45 },
+  rush: { name: 'Rush Hour', icon: '⏩', desc: 'The zone moves twice as fast.', zoneSpeed: 2 },
+  gold: { name: 'Gold Rush', icon: '💰', desc: 'All points are doubled. Go shopping!', pointsMult: 2 },
+  boom: { name: 'Boom Town', icon: '💣', desc: 'Start with max grenades and get a new one every 10 s.', nadeRefill: 10, fullNades: true },
+  speed: { name: 'Speed Demons', icon: '⚡', desc: 'Everyone moves 30% faster.', speedMult: 1.3 },
+  glass: { name: 'Glass Cannons', icon: '🔥', desc: 'All weapon damage +60%.', dmgMult: 1.6 },
+  heads: { name: 'Headhunters', icon: '🎯', desc: 'Headshots deal +50% extra damage.', headMult: 1.5 },
+};
+export const mut = (id) => MUTATORS[id] || MUTATORS.classic;
+
+export const BOT_SKILL = {
+  easy: { name: 'Easy', aim: 0.6, react: 1.6, dmg: 0.55, nades: 0.4 },
+  normal: { name: 'Normal', aim: 1, react: 1, dmg: 0.75, nades: 1 },
+  hard: { name: 'Hard', aim: 1.45, react: 0.6, dmg: 0.95, nades: 1.6 },
+};
+
+export const SUPPLY_DROP_EVERY = 75; // seconds between supply drops
+export const DROP_FALL_SPEED = 6;

@@ -13,10 +13,10 @@ import { EventEmitter } from 'node:events';
 import {
   CLASSES, MAX_PLAYERS, ZONE_PHASES, ZONE_START_RADIUS, PLAYER_COLORS, BOT_NAMES, MAX_HP, MAX_SHIELD,
   MEDKIT_HEAL, SHIELD_GAIN, DROP_HEIGHT, EYE_HEIGHT, BODY_HEIGHT, computeDamage, MAP_HALF,
-  POINTS, SHOP_ITEMS, DMG_UPGRADE,
+  POINTS, SHOP_ITEMS, DMG_UPGRADE, GRENADE, MUTATORS, mut, BOT_SKILL, SUPPLY_DROP_EVERY, DROP_FALL_SPEED,
 } from './public/shared/config.js';
 import { generateMap } from './public/shared/map.js';
-import { World, stepBody, lineOfSight } from './public/shared/physics.js';
+import { World, stepBody, stepGrenade, lineOfSight } from './public/shared/physics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
@@ -117,7 +117,17 @@ const game = {
   startedWith: 0,
   endAt: 0,
   time: 0,
+  mutator: 'random',         // host's choice (or 'random')
+  mut: 'classic',            // the mutator actually in play
+  botSkill: 'normal',
+  nades: [],
+  nextNadeId: 1,
+  nextPickupId: 0,
+  nextDropAt: 0,
+  bountyId: null,
 };
+const session = new Map();   // name -> { name, wins, kills, games } for this server run
+const M = () => mut(game.mut);
 buildMap();
 
 function newSeed() { return (Math.random() * 0xffffffff) >>> 0; }
@@ -142,18 +152,25 @@ function makePlayer(fields) {
     id: nextId++, name: 'Player', cls: 'rifle', color: freeColor(), isBot: false, ws: null,
     x: 0, y: 0, z: 0, yaw: 0, pitch: 0, crouch: 0, glide: 0,
     hp: MAX_HP, shield: 0, alive: false, inMatch: false, kills: 0, place: 0,
-    lastShot: 0, joinedAt: Date.now(), points: 0, up: newUpgrades(), ...fields,
+    lastShot: 0, joinedAt: Date.now(), points: 0, up: newUpgrades(), nades: 0, lastNade: 0, scope: 0,
+    stats: newStats(), ...fields,
   };
 }
 
 function newUpgrades() { return { dmg: 0, speed: 0, jump: 0, mag: 0 }; }
-const dmgMult = (p) => 1 + DMG_UPGRADE * p.up.dmg;
+function newStats() { return { dmg: 0, longest: 0, earned: 0, nadeKills: 0 }; }
+const dmgMult = (p) => (1 + DMG_UPGRADE * p.up.dmg) * (M().dmgMult || 1);
+const maxNades = (p) => CLASSES[p.cls].grenades.max;
 
 function givePoints(p, n, why) {
   if (p.isBot || !n) return;
+  n = Math.round(n * (M().pointsMult || 1));
   p.points += n;
+  p.stats.earned += n;
   send(p, { t: 'pts', pts: p.points, up: p.up, gain: n, why });
 }
+
+function sendInv(p) { send(p, { t: 'inv', nades: p.nades, max: maxNades(p) }); }
 
 function onBuy(p, id) {
   const item = SHOP_ITEMS.find((i) => i.id === id);
@@ -163,11 +180,13 @@ function onBuy(p, id) {
   if (item.max && (p.up[id] || 0) >= item.max) return fail(`${item.name} is already maxed`);
   if (id === 'med' && p.hp >= MAX_HP) return fail('Health is already full');
   if ((id === 'shield' || id === 'bigshield') && p.shield >= MAX_SHIELD) return fail('Shield is already full');
+  if (id === 'nade' && p.nades >= maxNades(p)) return fail(`You can only carry ${maxNades(p)} grenades`);
   if (p.points < item.cost) return fail(`Need ${item.cost - p.points} more points`);
   p.points -= item.cost;
   if (id === 'med') p.hp = Math.min(MAX_HP, p.hp + MEDKIT_HEAL);
   else if (id === 'shield') p.shield = Math.min(MAX_SHIELD, p.shield + SHIELD_GAIN);
   else if (id === 'bigshield') p.shield = MAX_SHIELD;
+  else if (id === 'nade') { p.nades++; sendInv(p); }
   else if (item.max) p.up[id] = (p.up[id] || 0) + 1;
   send(p, { t: 'pts', pts: p.points, up: p.up, gain: 0, bought: id });
 }
@@ -186,6 +205,8 @@ function pickHost() {
 function lobbyState() {
   return {
     t: 'lobby', phase: game.phase, seed: game.seed, host: game.hostId, bots: game.bots,
+    mutator: game.mutator, botSkill: game.botSkill,
+    session: [...session.values()].sort((a, b) => b.wins - a.wins || b.kills - a.kills).slice(0, 8),
     players: [...players.values()].map((p) => ({ id: p.id, name: p.name, cls: p.cls, color: p.color, bot: p.isBot, inMatch: p.inMatch })),
   };
 }
@@ -204,7 +225,7 @@ function onConnection(ws, addr) {
       console.log(`  + ${me.name} joined from ${addr.replace('::ffff:', '')}`);
       send(me, { t: 'welcome', id: me.id, addresses: lanAddresses(), port: actualPort });
       if (game.phase !== 'lobby') {
-        send(me, { t: 'start', seed: game.seed, spectator: true, pickups: game.pickups.map(pk => [pk.id, pk.type, pk.x, pk.y, pk.z, pk.taken ? 1 : 0]) });
+        send(me, { t: 'start', seed: game.seed, spectator: true, mut: game.mut, pickups: game.pickups.map(pickupWire) });
       }
       broadcast(lobbyState());
       return;
@@ -239,16 +260,24 @@ function handle(p, m) {
     case 'bots':
       if (p.id === game.hostId && game.phase === 'lobby') { game.bots = Math.max(0, Math.min(7, m.n | 0)); broadcast(lobbyState()); }
       break;
+    case 'opts':
+      if (p.id === game.hostId && game.phase === 'lobby') {
+        if (m.mutator === 'random' || MUTATORS[m.mutator]) game.mutator = m.mutator;
+        if (BOT_SKILL[m.botSkill]) game.botSkill = m.botSkill;
+        broadcast(lobbyState());
+      }
+      break;
     case 'start':
       if (p.id === game.hostId && game.phase === 'lobby') startMatch();
       break;
     case 'st':
       if (!p.inMatch || !p.alive || !Array.isArray(m.p)) break;
       p.x = +m.p[0] || 0; p.y = +m.p[1] || 0; p.z = +m.p[2] || 0;
-      p.yaw = +m.yw || 0; p.pitch = +m.pt || 0; p.crouch = m.cr ? 1 : 0; p.glide = m.gl ? 1 : 0;
+      p.yaw = +m.yw || 0; p.pitch = +m.pt || 0; p.crouch = m.cr ? 1 : 0; p.glide = m.gl ? 1 : 0; p.scope = m.sc ? 1 : 0;
       break;
     case 'shot': onShot(p, m); break;
     case 'melee': onMelee(p, m); break;
+    case 'nade': onNade(p, m); break;
     case 'buy': onBuy(p, String(m.item)); break;
     case 'chat': if (typeof m.s === 'string') broadcast({ t: 'chat', id: p.id, s: m.s.slice(0, 120) }); break;
   }
@@ -267,7 +296,9 @@ function onShot(p, m) {
   if (!v || v === p || !v.inMatch || !v.alive) return;
   const dist = Math.hypot(v.x - p.x, v.y - p.y, v.z - p.z);
   if (dist > w.range + 8) return;
-  applyDamage(v, Math.round(computeDamage(p.cls, dist, !!m.head, false) * dmgMult(p)), p, p.cls, !!m.head);
+  const head = !!m.head;
+  const dmg = computeDamage(p.cls, dist, head, false) * dmgMult(p) * (head ? M().headMult || 1 : 1);
+  if (applyDamage(v, Math.round(dmg), p, p.cls, head)) p.stats.longest = Math.max(p.stats.longest, Math.round(dist));
 }
 
 function onMelee(p, m) {
@@ -284,6 +315,59 @@ function onMelee(p, m) {
   if (dist > w.range + 1.6) return;
   const back = isBehind(v, p);
   applyDamage(v, Math.round(computeDamage('melee', dist, false, back) * dmgMult(p)), p, 'melee', false, back);
+  lifesteal(p);
+}
+
+function lifesteal(p) {
+  const ls = CLASSES[p.cls].lifesteal;
+  if (ls && p.alive) p.hp = Math.min(MAX_HP, p.hp + ls);
+}
+
+// ------------------------------------------------------------------ grenades
+function onNade(p, m) {
+  if (!p.inMatch || !p.alive || p.glide || p.nades <= 0) return;
+  if (game.time - p.lastNade < GRENADE.cooldown * 0.8) return;
+  if (!Array.isArray(m.o) || !Array.isArray(m.v)) return;
+  let o = m.o.map((n) => +n || 0), v = m.v.map((n) => +n || 0);
+  if (Math.hypot(o[0] - p.x, o[1] - p.y - EYE_HEIGHT, o[2] - p.z) > 3) o = [p.x, p.y + EYE_HEIGHT, p.z];
+  const sp = Math.hypot(v[0], v[1], v[2]), maxSp = GRENADE.speed + GRENADE.lift + 14;
+  if (sp > maxSp) v = v.map((n) => n * maxSp / sp);
+  p.nades--; p.lastNade = game.time;
+  sendInv(p);
+  throwNade(p, o, v);
+}
+
+function throwNade(p, o, v) {
+  const g = { id: game.nextNadeId++, owner: p.id, x: o[0], y: o[1], z: o[2], vx: v[0], vy: v[1], vz: v[2], t: GRENADE.fuse };
+  game.nades.push(g);
+  broadcast({ t: 'nade', id: g.id, owner: p.id, o, v });
+}
+
+function updateNades(dt) {
+  for (let i = game.nades.length - 1; i >= 0; i--) {
+    const g = game.nades[i];
+    stepGrenade(game.world, g, dt, M().gravity || 1);
+    g.t -= dt;
+    if (g.t <= 0) { game.nades.splice(i, 1); explode(g); }
+  }
+}
+
+function explode(g) {
+  broadcast({ t: 'boom', id: g.id, p: [r2(g.x), r2(g.y), r2(g.z)] });
+  const owner = players.get(g.owner) || null;
+  const R = GRENADE.radius;
+  for (const v of aliveList()) {
+    const cy = v.y + 1.0;
+    const d = Math.hypot(v.x - g.x, cy - g.y, v.z - g.z);
+    if (d > R) continue;
+    // walls block the blast (check chest and head so ducking behind a car helps but isn't perfect)
+    if (!lineOfSight(game.world, g.x, g.y + 0.25, g.z, v.x, cy, v.z) && !lineOfSight(game.world, g.x, g.y + 0.25, g.z, v.x, v.y + 1.6, v.z)) continue;
+    let dmg = GRENADE.maxDamage + (GRENADE.minDamage - GRENADE.maxDamage) * (d / R);
+    if (owner === v) dmg *= GRENADE.selfMult;
+    else if (owner) dmg *= dmgMult(owner) * (owner.isBot ? BOT_SKILL[game.botSkill].dmg : 1);
+    const killed = applyDamage(v, Math.round(dmg), owner && owner !== v ? owner : null, 'nade', false, false, [g.x, g.z]);
+    if (killed && owner && owner !== v) owner.stats.nadeKills++;
+  }
 }
 
 function isBehind(victim, attacker) {
@@ -293,23 +377,72 @@ function isBehind(victim, attacker) {
   return fx * ax + fz * az < -0.4;
 }
 
-function applyDamage(v, amount, attacker, weapon, head = false, backstab = false) {
-  if (!v.alive) return;
+function applyDamage(v, amount, attacker, weapon, head = false, backstab = false, from = null) {
+  if (!v.alive) return false;
+  const resist = CLASSES[v.cls].resist;
+  if (resist && weapon !== 'zone') amount = Math.round(amount * resist);
   let rest = amount;
   if (v.shield > 0) { const a = Math.min(v.shield, rest); v.shield -= a; rest -= a; }
   v.hp -= rest;
   const killed = v.hp <= 0;
-  send(v, { t: 'hurt', amt: amount, from: attacker ? [attacker.x, attacker.z] : null, w: weapon });
-  if (attacker) send(attacker, { t: 'hitm', head, kill: killed, back: backstab, amt: amount });
+  if (attacker) attacker.stats.dmg += amount;
+  send(v, { t: 'hurt', amt: amount, from: from || (attacker ? [attacker.x, attacker.z] : null), w: weapon });
+  if (attacker) send(attacker, { t: 'hitm', v: v.id, head, kill: killed, back: backstab, amt: amount, w: weapon });
   if (killed) killPlayer(v, attacker, weapon, head);
+  return killed;
 }
 
 function killPlayer(v, killer, weapon, head = false) {
   v.alive = false; v.hp = 0;
   v.place = aliveList().length + 1;
-  if (killer && killer !== v) { killer.kills++; givePoints(killer, POINTS.kill, 'kill'); }
-  broadcast({ t: 'kill', k: killer ? killer.id : null, v: v.id, w: weapon, hs: head, place: v.place });
+  const wasBounty = game.bountyId === v.id;
+  if (killer && killer !== v) {
+    killer.kills++;
+    givePoints(killer, POINTS.kill, 'kill');
+    if (wasBounty) givePoints(killer, POINTS.bounty, 'bounty');
+    if (!killer.isBot) sessionEntry(killer).kills++;
+  }
+  broadcast({ t: 'kill', k: killer ? killer.id : null, v: v.id, w: weapon, hs: head, place: v.place, bounty: wasBounty });
+  // the fallen drop a loot bag: some of their points plus a grenade
+  if (weapon !== 'left' && game.phase === 'playing') {
+    addPickup('bag', v.x, Math.max(0, v.y), v.z, { value: 40 + Math.floor(v.points * 0.5), nades: v.nades > 0 ? 1 : 0 });
+  }
   checkEnd();
+}
+
+function sessionEntry(p) {
+  if (!session.has(p.name)) session.set(p.name, { name: p.name, wins: 0, kills: 0, games: 0 });
+  return session.get(p.name);
+}
+
+// ------------------------------------------------------------------ dynamic pickups (loot bags, supply drops)
+function pickupWire(pk) {
+  const fall = pk.landAt ? Math.max(0, r2(pk.landAt - game.time)) : 0;
+  return [pk.id, pk.type, r2(pk.x), r2(pk.y), r2(pk.z), pk.taken ? 1 : 0, fall];
+}
+
+function addPickup(type, x, y, z, extra = {}) {
+  const pk = { id: game.nextPickupId++, type, x, y, z, taken: false, ...extra };
+  game.pickups.push(pk);
+  broadcast({ t: 'pkadd', list: [pickupWire(pk)] });
+  return pk;
+}
+
+function spawnSupplyDrop() {
+  const z = game.zone;
+  const cx = z.stage === 'wait' ? z.tx : z.cx, cz = z.stage === 'wait' ? z.tz : z.cz;
+  const r = Math.max(4, (z.stage === 'wait' ? z.tr : z.r) * 0.6);
+  for (let tries = 0; tries < 12; tries++) {
+    const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * r;
+    const x = Math.max(-MAP_HALF + 8, Math.min(MAP_HALF - 8, cx + Math.cos(a) * d));
+    const zz = Math.max(-MAP_HALF + 8, Math.min(MAP_HALF - 8, cz + Math.sin(a) * d));
+    const top = 90;
+    const y = top - game.world.raycast(x, top, zz, 0, -1, 0, top);
+    if (game.world.anyOverlap(x - 0.8, y + 0.05, zz - 0.8, x + 0.8, y + 1.5, zz + 0.8)) continue;
+    const pk = addPickup('drop', x, y, zz, { landAt: game.time + (top - y) / DROP_FALL_SPEED });
+    broadcast({ t: 'drop', x: r2(x), z: r2(zz) });
+    return pk;
+  }
 }
 
 // ------------------------------------------------------------------ match flow
@@ -318,20 +451,25 @@ function startMatch() {
   if (!hs.length) return;
   // remove leftover bots and add new ones
   for (const p of [...players.values()]) if (p.isBot) players.delete(p.id);
+  const ids = Object.keys(MUTATORS);
+  game.mut = game.mutator === 'random' ? ids[Math.floor(Math.random() * ids.length)] : game.mutator;
   const nb = Math.min(game.bots, MAX_PLAYERS - hs.length);
   const names = [...BOT_NAMES].sort(() => Math.random() - 0.5);
   const clsList = ['sniper', 'rifle', 'melee'];
   for (let i = 0; i < nb; i++) {
     const b = makePlayer({ isBot: true, name: names[i] + ' (bot)', cls: clsList[i % 3] });
-    b.ai = { goal: null, goalT: 0, target: null, think: 0, react: 0, stuckT: 0, lastX: 0, lastZ: 0, detour: 0, dx: 0, dz: 0 };
+    b.ai = { goal: null, goalT: 0, target: null, think: 0, react: 0, stuckT: 0, lastX: 0, lastZ: 0, detour: 0, dx: 0, dz: 0, nadeT: 4 + Math.random() * 6 };
     players.set(b.id, b);
   }
   const all = [...players.values()];
   const R = 140;
   const startAngle = Math.random() * Math.PI * 2;
   all.forEach((p, i) => {
-    p.inMatch = true; p.alive = true; p.hp = MAX_HP; p.shield = 0; p.kills = 0; p.place = 0; p.lastShot = 0;
-    p.points = 0; p.up = newUpgrades();
+    const C = CLASSES[p.cls];
+    p.inMatch = true; p.alive = true; p.hp = MAX_HP; p.shield = C.startShield || 0; p.kills = 0; p.place = 0; p.lastShot = 0;
+    p.points = 0; p.up = newUpgrades(); p.stats = newStats(); p.scope = 0; p.lastNade = 0; p.nadeAcc = 0;
+    p.nades = M().fullNades ? C.grenades.max : C.grenades.start;
+    if (!p.isBot) sessionEntry(p).games++;
     if (p.isBot) {
       const spots = game.map.spawnSpots;
       const s = spots[Math.floor(Math.random() * spots.length)];
@@ -345,19 +483,24 @@ function startMatch() {
   game.startedWith = all.length;
   // pickups
   const spots = [...game.map.pickupSpots].sort(() => Math.random() - 0.5).slice(0, 140);
-  const lootType = () => { const r = Math.random(); return r < 0.3 ? 'med' : r < 0.55 ? 'shield' : r < 0.85 ? 'coin' : 'gem'; };
+  const lootType = () => { const r = Math.random(); return r < 0.27 ? 'med' : r < 0.49 ? 'shield' : r < 0.6 ? 'nade' : r < 0.86 ? 'coin' : 'gem'; };
   game.pickups = spots.map((s, i) => ({ id: i, type: lootType(), x: s[0], y: s[1], z: s[2], taken: false }));
+  game.nextPickupId = game.pickups.length;
+  game.nades = [];
+  game.bountyId = null;
+  game.nextDropAt = 50;
   // zone
   game.zone = { cx: 0, cz: 0, r: ZONE_START_RADIUS, fx: 0, fz: 0, fr: ZONE_START_RADIUS, tx: 0, tz: 0, tr: 0, idx: 0, stage: 'wait', t: 0 };
   pickZoneTarget();
   game.phase = 'playing';
   game.time = 0;
-  console.log(`  Match started: ${hs.length} player(s), ${nb} bot(s)`);
-  const pk = game.pickups.map((p) => [p.id, p.type, +p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2), 0]);
+  console.log(`  Match started: ${hs.length} player(s), ${nb} bot(s), mutator: ${M().name}`);
+  const pk = game.pickups.map(pickupWire);
   for (const p of all) {
     if (p.isBot) continue;
-    send(p, { t: 'start', seed: game.seed, spawn: [p.x, p.y, p.z], yaw: p.yaw, pickups: pk, spectator: false });
+    send(p, { t: 'start', seed: game.seed, spawn: [p.x, p.y, p.z], yaw: p.yaw, pickups: pk, spectator: false, mut: game.mut });
     send(p, { t: 'pts', pts: 0, up: p.up, gain: 0 });
+    sendInv(p);
   }
   broadcast(lobbyState());
 }
@@ -415,9 +558,21 @@ function endMatch(winner) {
   game.phase = 'ended';
   if (winner) winner.place = 1;
   for (const p of aliveList()) p.place = 1;
-  const standings = inMatch().sort((a, b) => (a.place || 99) - (b.place || 99) || b.kills - a.kills)
-    .map((p) => ({ id: p.id, name: p.name, cls: p.cls, color: p.color, kills: p.kills, place: p.place }));
-  broadcast({ t: 'end', winner: winner ? winner.id : null, name: winner ? winner.name : null, standings });
+  const ps = inMatch();
+  const standings = ps.sort((a, b) => (a.place || 99) - (b.place || 99) || b.kills - a.kills)
+    .map((p) => ({ id: p.id, name: p.name, cls: p.cls, color: p.color, kills: p.kills, place: p.place, dmg: p.stats.dmg }));
+  if (winner && !winner.isBot) sessionEntry(winner).wins++;
+  const best = (key, min, fmt) => {
+    const top = ps.reduce((a, p) => (p.stats[key] > (a ? a.stats[key] : 0) ? p : a), null);
+    return top && top.stats[key] >= min ? { name: top.name, color: top.color, value: fmt(top.stats[key]) } : null;
+  };
+  const awards = [
+    ['💥', 'Damage Dealer', best('dmg', 1, (v) => `${v} damage`)],
+    ['🎯', 'Longest Shot', best('longest', 25, (v) => `${v} m`)],
+    ['🪙', 'Scavenger King', best('earned', 1, (v) => `${v} points`)],
+    ['💣', 'Demolition', best('nadeKills', 1, (v) => `${v} grenade kill${v > 1 ? 's' : ''}`)],
+  ].filter((a) => a[2]).map(([icon, title, a]) => ({ icon, title, ...a }));
+  broadcast({ t: 'end', winner: winner ? winner.id : null, name: winner ? winner.name : null, standings, awards });
   console.log(`  Match over. Winner: ${winner ? winner.name : 'nobody'}`);
   game.endAt = Date.now() + 10000;
 }
@@ -436,7 +591,6 @@ function resetToLobby() {
 
 // ------------------------------------------------------------------ bots
 const BOT_SIGHT = { sniper: 170, rifle: 90, melee: 70 };
-const BOT_DAMAGE = 0.75; // bots hit a bit softer than humans
 
 function updateBot(b, dt) {
   const ai = b.ai, z = game.zone, w = game.world;
@@ -452,7 +606,7 @@ function updateBot(b, dt) {
       if (!lineOfSight(w, b.x, b.y + EYE_HEIGHT, b.z, o.x, o.y + 1.3, o.z)) continue;
       best = o; bd = d;
     }
-    if (best && ai.target !== best.id) ai.react = 0.7 + Math.random() * 0.6;
+    if (best && ai.target !== best.id) ai.react = (0.7 + Math.random() * 0.6) * BOT_SKILL[game.botSkill].react;
     ai.target = best ? best.id : null;
   }
   const t = ai.target != null ? players.get(ai.target) : null;
@@ -497,9 +651,11 @@ function updateBot(b, dt) {
     ai.stuckT = 0; ai.lastX = b.x; ai.lastZ = b.z;
   }
   if (ai.detour > 0) { ai.detour -= dt; dx = ai.dx; dz = ai.dz; }
+  speed *= M().speedMult || 1;
   b.vx = dx * speed; b.vz = dz * speed;
-  stepBody(w, b, dt);
+  stepBody(w, b, dt, 0, M().gravity || 1);
 
+  b.scope = b.cls === 'sniper' && t && t.alive ? 1 : 0; // sniper bots glint while aiming
   // face target or movement direction
   if (t && t.alive) {
     b.yaw = Math.atan2(-(t.x - b.x), -(t.z - b.z));
@@ -509,6 +665,19 @@ function updateBot(b, dt) {
   // attack
   ai.react -= dt;
   if (!t || !t.alive || ai.react > 0) return;
+  const skill = BOT_SKILL[game.botSkill];
+  // lob a grenade now and then at mid range
+  ai.nadeT -= dt * skill.nades;
+  const dn = Math.hypot(t.x - b.x, t.z - b.z);
+  if (b.nades > 0 && ai.nadeT <= 0 && dn > 7 && dn < 30) {
+    ai.nadeT = 7 + Math.random() * 8;
+    const T = Math.max(0.7, Math.min(1.6, dn / 14)), G = 22 * (M().gravity || 1);
+    const o = [b.x, b.y + EYE_HEIGHT, b.z];
+    const tx = t.x + (Math.random() - 0.5) * 3 / skill.aim, tz = t.z + (Math.random() - 0.5) * 3 / skill.aim;
+    b.nades--;
+    throwNade(b, o, [(tx - o[0]) / T, (t.y + 0.3 - o[1] + 0.5 * G * T * T) / T, (tz - o[2]) / T]);
+    return;
+  }
   const wp = CLASSES[b.cls].weapon;
   if (game.time - b.lastShot < wp.rate * (b.cls === 'rifle' ? 2.2 : 1.4)) return;
   const d3 = Math.hypot(t.x - b.x, t.y - b.y, t.z - b.z);
@@ -517,20 +686,22 @@ function updateBot(b, dt) {
     b.lastShot = game.time;
     broadcast({ t: 'fx', k: 'swing', id: b.id });
     const back = isBehind(t, b);
-    applyDamage(t, Math.round(computeDamage('melee', d3, false, back) * BOT_DAMAGE), b, 'melee', false, back);
+    applyDamage(t, Math.round(computeDamage('melee', d3, false, back) * skill.dmg * (M().dmgMult || 1)), b, 'melee', false, back);
+    lifesteal(b);
     return;
   }
   if (d3 > wp.range) return;
   if (!lineOfSight(w, b.x, b.y + EYE_HEIGHT, b.z, t.x, t.y + 1.3, t.z)) { ai.target = null; return; }
   b.lastShot = game.time;
-  const chance = b.cls === 'sniper' ? 0.5 - d3 / 700 : 0.42 - d3 / 260;
+  // snipers are clumsy up close (no time to scope), rifles lose accuracy with range
+  const chance = (b.cls === 'sniper' ? (d3 < 20 ? 0.22 : 0.5 - d3 / 700) : 0.42 - d3 / 260) * skill.aim;
   const hit = Math.random() < Math.max(0.06, chance) * (t.crouch ? 0.8 : 1);
   const head = hit && Math.random() < (b.cls === 'sniper' ? 0.05 : 0.12);
   const o = [r2(b.x), r2(b.y + EYE_HEIGHT - 0.2), r2(b.z)];
   const e = hit ? [r2(t.x), r2(t.y + (head ? 1.6 : 1.0)), r2(t.z)]
     : [r2(t.x + (Math.random() - 0.5) * 3), r2(t.y + Math.random() * 2.5), r2(t.z + (Math.random() - 0.5) * 3)];
   broadcast({ t: 'fx', k: 'shot', id: b.id, c: b.cls, o, e });
-  if (hit) applyDamage(t, Math.round(computeDamage(b.cls, d3, head, false) * BOT_DAMAGE), b, b.cls, head);
+  if (hit) applyDamage(t, Math.round(computeDamage(b.cls, d3, head, false) * skill.dmg * (M().dmgMult || 1) * (head ? M().headMult || 1 : 1)), b, b.cls, head);
 }
 
 // ------------------------------------------------------------------ main loop
@@ -538,12 +709,27 @@ setInterval(() => {
   const dt = TICK;
   if (game.phase === 'playing') {
     game.time += dt;
-    updateZone(dt);
+    updateZone(dt * (M().zoneSpeed || 1));
+    updateNades(dt);
+    if (game.time >= game.nextDropAt && game.zone.stage !== 'closed') { spawnSupplyDrop(); game.nextDropAt = game.time + SUPPLY_DROP_EVERY; }
+    // bounty: the outright kill leader (2+ kills) is marked for everyone
+    const leader = aliveList().reduce((a, p) => (p.kills > (a ? a.kills : 1) ? p : a), null);
+    const tied = leader && aliveList().some((p) => p !== leader && p.kills === leader.kills);
+    const bounty = leader && !tied ? leader.id : null;
+    if (bounty !== game.bountyId) {
+      game.bountyId = bounty;
+      if (bounty) broadcast({ t: 'bounty', id: bounty });
+    }
     const z = game.zone;
     const dps = zoneDps();
     for (const p of aliveList()) {
       if (p.isBot) updateBot(p, dt);
       if (!p.alive) continue;
+      // Boom Town mutator: grenades recharge
+      if (M().nadeRefill && p.nades < maxNades(p)) {
+        p.nadeAcc += dt;
+        if (p.nadeAcc >= M().nadeRefill) { p.nadeAcc = 0; p.nades++; sendInv(p); }
+      }
       // zone damage
       if (Math.hypot(p.x - z.cx, p.z - z.cz) > z.r && !p.glide) {
         p.zoneAcc = (p.zoneAcc || 0) + dps * dt;
@@ -556,13 +742,21 @@ setInterval(() => {
       }
       // pickups
       for (const pk of game.pickups) {
-        if (pk.taken || Math.abs(pk.y - p.y) > 1.5 || Math.hypot(pk.x - p.x, pk.z - p.z) > 1.4) continue;
+        if (pk.taken || Math.abs(pk.y - p.y) > 1.5 || Math.hypot(pk.x - p.x, pk.z - p.z) > (pk.type === 'drop' ? 2 : 1.4)) continue;
+        if (pk.landAt && game.time < pk.landAt) continue;
         if (pk.type === 'med' && p.hp >= MAX_HP) continue;
         if (pk.type === 'shield' && p.shield >= MAX_SHIELD) continue;
+        if (pk.type === 'nade' && p.nades >= maxNades(p)) continue;
         pk.taken = true;
         if (pk.type === 'med') p.hp = Math.min(MAX_HP, p.hp + MEDKIT_HEAL);
         else if (pk.type === 'shield') p.shield = Math.min(MAX_SHIELD, p.shield + SHIELD_GAIN);
-        givePoints(p, POINTS[pk.type] || POINTS.loot, pk.type);
+        else if (pk.type === 'nade') { p.nades++; sendInv(p); }
+        else if (pk.type === 'bag' && pk.nades && p.nades < maxNades(p)) { p.nades++; sendInv(p); }
+        else if (pk.type === 'drop') {
+          p.hp = Math.min(MAX_HP, p.hp + 50); p.shield = MAX_SHIELD;
+          p.nades = Math.min(maxNades(p), p.nades + 2); sendInv(p);
+        }
+        givePoints(p, pk.type === 'bag' ? pk.value : POINTS[pk.type] || POINTS.loot, pk.type);
         broadcast({ t: 'pk', id: pk.id, by: p.id, type: pk.type });
       }
     }
@@ -572,7 +766,8 @@ setInterval(() => {
       t: 's',
       z: game.zone ? zoneInfo() : null,
       a: aliveList().length,
-      p: inMatch().map((p) => [p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.crouch, p.glide, p.alive ? 1 : 0, Math.max(0, Math.ceil(p.hp)), Math.ceil(p.shield), p.kills]),
+      b: game.bountyId,
+      p: inMatch().map((p) => [p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.crouch, p.glide, p.alive ? 1 : 0, Math.max(0, Math.ceil(p.hp)), Math.ceil(p.shield), p.kills, p.scope]),
     };
     broadcast(snap);
   }

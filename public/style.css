@@ -146,3 +146,36 @@ body.touch #killfeed { top: 160px; right: 80px; }
 #shopMsg { min-height: 22px; margin-top: 8px; text-align: center; font-weight: bold; color: #ffadad; }
 #tShop { top: 256px; right: 20px; width: 48px; height: 48px; font-size: 20px; background: rgba(255, 190, 11, .6); }
 @media (max-width: 760px) { #shopItems { grid-template-columns: repeat(2, 1fr); } }
+
+/* ---------- v2: options, grenades, banners, awards ---------- */
+select { font-family: inherit; font-size: 14px; padding: 5px 8px; border-radius: 8px; border: 2px solid #b388ff; background: #fff; color: #222; }
+.opt-row { display: flex; gap: 10px; align-items: center; }
+.opt-row select { flex: 1; }
+.mut-desc { font-size: 13px; opacity: .85; min-height: 18px; }
+.class-card .passive { font-size: 12px; color: #ffe8a3; margin: 6px 0 2px; }
+.class-card .nades { font-size: 12px; opacity: .9; }
+.session { margin-top: 14px; }
+.session h3 { margin: 0 0 6px; }
+.session table td, .session table th { padding: 3px 10px; font-size: 14px; }
+.pill.mut { background: rgba(179, 136, 255, .85); }
+.pill.mut:empty { display: none; }
+#nadeCount { font-size: 18px; font-weight: 900; margin-top: 2px; }
+#nadeCount.empty { opacity: .4; }
+#banner { position: absolute; top: 96px; left: 50%; transform: translateX(-50%); font-size: 22px; font-weight: 900; text-align: center; white-space: nowrap;
+  background: linear-gradient(90deg, rgba(255,158,0,.9), rgba(241,91,181,.9)); padding: 8px 22px; border-radius: 16px; opacity: 0; pointer-events: none; text-shadow: 0 2px 0 rgba(0,0,0,.25); }
+#banner.show { animation: banner 3.6s forwards; }
+@keyframes banner { 0% { opacity: 0; transform: translate(-50%, -14px) scale(.9) } 10% { opacity: 1; transform: translate(-50%, 0) scale(1) } 85% { opacity: 1 } 100% { opacity: 0 } }
+#dmgNums { position: absolute; inset: 0; overflow: hidden; }
+.dmgnum { position: absolute; font-weight: 900; font-size: 18px; color: #fff; text-shadow: 0 2px 0 #000, 0 0 4px #000; transform: translate(-50%, -50%); animation: dmgnum .8s forwards; }
+.dmgnum.head { color: #ffd60a; font-size: 22px; }
+.dmgnum.kill { color: #ff4d6d; font-size: 24px; }
+@keyframes dmgnum { 0% { opacity: 1; margin-top: 0 } 100% { opacity: 0; margin-top: -40px } }
+#awards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.award { background: rgba(255,255,255,.1); border-radius: 14px; padding: 10px; text-align: center; }
+.award .ai { font-size: 28px; }
+.award .at { font-size: 12px; opacity: .8; text-transform: uppercase; letter-spacing: 1px; }
+.award .an { font-weight: 900; font-size: 17px; }
+.award .av { font-size: 13px; opacity: .85; }
+#tNade { right: 260px; bottom: 150px; background: rgba(61, 220, 151, .5); font-size: 26px; }
+body.touch #banner { top: 60px; font-size: 18px; }
+body.touch #nadeCount { font-size: 16px; }

@@ -12,6 +12,7 @@ export class Input {
     this.stick = { x: 0, y: 0 };
     this.pressed = new Set(); // edge-triggered actions: jump, reload, dash, aimTap
     this.showScores = false;
+    this.nadeHeld = false;      // grenade aim held (G key / bomb button); releasing throws
     this.locked = false;
     this.enabled = false;
     this.sensitivity = 0.0022;
@@ -30,7 +31,8 @@ export class Input {
         if (e.code === 'KeyR') this.pressed.add('reload');
         if (e.code === 'KeyE' || e.code === 'KeyQ') this.pressed.add('dash');
         if (e.code === 'KeyB') this.pressed.add('shop');
-        if (/^Digit[1-8]$/.test(e.code)) this.pressed.add('buy' + e.code.slice(5));
+        if (e.code === 'KeyG') this.nadeHeld = true;
+        if (/^Digit[1-9]$/.test(e.code)) this.pressed.add('buy' + e.code.slice(5));
       }
       this.keys.add(e.code);
       if (['Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
@@ -38,8 +40,9 @@ export class Input {
     window.addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
       if (e.code === 'Tab') { e.preventDefault(); this.showScores = false; }
+      if (e.code === 'KeyG' && this.nadeHeld) { this.nadeHeld = false; this.pressed.add('nadeThrow'); }
     });
-    window.addEventListener('blur', () => { this.keys.clear(); this.fire = false; this.aim = false; });
+    window.addEventListener('blur', () => { this.keys.clear(); this.fire = false; this.aim = false; this.nadeHeld = false; });
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === this.canvas;
       if (!this.locked) { this.fire = false; this.aim = false; }
@@ -115,6 +118,13 @@ export class Input {
     const endFire = (e) => { this.fire = false; endLook(e); fire.classList.remove('on'); };
     fire.addEventListener('pointerup', endFire);
     fire.addEventListener('pointercancel', endFire);
+
+    // bomb button: hold to show the arc (drag to aim), release to throw
+    const nade = $('tNade');
+    nade.addEventListener('pointerdown', (e) => { e.preventDefault(); this.nadeHeld = true; startLook(nade, e); nade.classList.add('on'); });
+    nade.addEventListener('pointermove', moveLook);
+    nade.addEventListener('pointerup', (e) => { if (this.nadeHeld) this.pressed.add('nadeThrow'); this.nadeHeld = false; endLook(e); nade.classList.remove('on'); });
+    nade.addEventListener('pointercancel', (e) => { this.nadeHeld = false; endLook(e); nade.classList.remove('on'); });
 
     const tap = (id, fn) => $(id).addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); fn($(id)); });
     tap('tJump', () => this.pressed.add('jump'));

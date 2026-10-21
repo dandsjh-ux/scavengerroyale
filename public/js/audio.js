@@ -52,3 +52,6 @@ export function sfxDash() { noise(0.25, 400, 1, 0.3, 'bandpass', 2400); }
 export function sfxZoneTick() { tone(220, 0.12, 0.15, 'sine'); }
 export function sfxWin() { [523, 659, 784, 1046, 784, 1046].forEach((f, i) => tone(f, 0.2, 0.25, 'triangle', 0, i * 0.12)); }
 export function sfxStep(vol = 0.06) { noise(0.06, 500, 1, vol, 'lowpass'); }
+export function sfxBoom(vol = 1) { noise(1.1, 900, 0.6, 1.0 * vol, 'lowpass', 60); tone(70, 0.6, 0.8 * vol, 'sine', 30); }
+export function sfxThrow(vol = 1) { if (vol > 0.02) noise(0.2, 600, 1.5, 0.25 * vol, 'bandpass', 1800); }
+export function sfxDrop() { [392, 523, 659, 784].forEach((f, i) => tone(f, 0.18, 0.18, 'square', 0, i * 0.09)); }

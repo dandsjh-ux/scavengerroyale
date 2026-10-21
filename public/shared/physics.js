@@ -1,7 +1,7 @@
 // Box-based collision world shared by the client (local player) and the server (bots).
 // Every solid is an axis-aligned box {x0,y0,z0,x1,y1,z1}. Bodies are AABBs standing on their feet.
 
-import { GRAVITY, STEP_HEIGHT, BODY_RADIUS, MAP_HALF } from './config.js';
+import { GRAVITY, STEP_HEIGHT, BODY_RADIUS, MAP_HALF, GRENADE } from './config.js';
 
 const EPS = 0.001;
 
@@ -131,8 +131,8 @@ export function raySphere(ox, oy, oz, dx, dy, dz, cx, cy, cz, r) {
 }
 
 // A body: {x,y,z,vx,vy,vz,h,onGround,glide}. Advances it by dt with gravity and collisions.
-export function stepBody(world, b, dt, glideFall = 0) {
-  b.vy -= GRAVITY * dt;
+export function stepBody(world, b, dt, glideFall = 0, gScale = 1) {
+  b.vy -= GRAVITY * gScale * dt;
   if (glideFall && b.vy < -glideFall) b.vy = -glideFall;
   const maxMove = Math.max(Math.abs(b.vx), Math.abs(b.vy), Math.abs(b.vz)) * dt;
   const steps = Math.max(1, Math.ceil(maxMove / 0.2));
@@ -208,4 +208,35 @@ export function lineOfSight(world, ax, ay, az, bx, by, bz) {
   const L = Math.hypot(dx, dy, dz);
   if (L < 1e-6) return true;
   return world.raycast(ax, ay, az, dx / L, dy / L, dz / L, L) >= L - 0.05;
+}
+
+// Grenade: a small bouncing ball {x,y,z,vx,vy,vz}. Deterministic, so clients can predict the
+// same path the server computes when both step with the same fixed dt.
+export function stepGrenade(world, g, dt, gScale = 1) {
+  const r = GRENADE.r, B = GRENADE.bounce, F = GRENADE.friction;
+  g.vy -= GRAVITY * gScale * dt;
+  const maxMove = Math.max(Math.abs(g.vx), Math.abs(g.vy), Math.abs(g.vz)) * dt;
+  const steps = Math.max(1, Math.ceil(maxMove / 0.1));
+  const sub = dt / steps;
+  const hit = () => world.anyOverlap(g.x - r, g.y - r, g.z - r, g.x + r, g.y + r, g.z + r);
+  for (let s = 0; s < steps; s++) {
+    g.x += g.vx * sub;
+    if (hit()) { g.x -= g.vx * sub; g.vx = -g.vx * B; }
+    g.z += g.vz * sub;
+    if (hit()) { g.z -= g.vz * sub; g.vz = -g.vz * B; }
+    g.y += g.vy * sub;
+    if (g.y < r) {
+      g.y = r;
+      g.vy = -g.vy * B; g.vx *= F; g.vz *= F;
+      if (Math.abs(g.vy) < 1.2) g.vy = 0;
+    } else if (hit()) {
+      g.y -= g.vy * sub;
+      if (g.vy < 0) { g.vx *= F; g.vz *= F; }
+      g.vy = -g.vy * B;
+      if (Math.abs(g.vy) < 1.2) g.vy = 0;
+    }
+  }
+  const lim = world.half - 20 - 0.5;
+  if (g.x > lim || g.x < -lim) { g.x = Math.max(-lim, Math.min(lim, g.x)); g.vx = -g.vx * B; }
+  if (g.z > lim || g.z < -lim) { g.z = Math.max(-lim, Math.min(lim, g.z)); g.vz = -g.vz * B; }
 }

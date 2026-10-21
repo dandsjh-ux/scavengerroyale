@@ -5,17 +5,31 @@ A bright, colourful first-person **battle royale** for up to **8 players on your
 - **Big procedural city**: a 360 m island with roads, parks, warehouses and towers, plus about 90 buildings with **interiors you can enter**. Buildings have stairs, several floors, rooms, windows and roofs to camp on. Every match gets a new layout.
 - **Skydive start**: everyone parachutes in and picks their own landing spot.
 - **Slowly shrinking zone**: six phases, about 10 minutes in total. The next circle is shown on the minimap, and standing outside it hurts more each phase.
-- **Loot**: medkits ❤ and shields 🛡 are scattered through the buildings, along with coins 🪙 and gems 💎 to collect.
-- **Points & shop 🛒**: you earn points from **kills (+100)** and from **scavenging** (coins +20, gems +50, any other loot +10). Spend them at any time in the shop (**B** key, or the 🛒 button on a tablet). It sells medkits, shield cells, Mega Shield, Power Core (+20% damage), Turbo Shoes (+12% speed), Spring Boots (+30% jump), Extended Mag (+50% magazine) and Radar Ping (shows every enemy on your minimap for 12 s). Points and upgrades reset each match. The server checks every purchase.
+- **Loot**: medkits ❤, shields 🛡 and grenades 💣 are scattered through the buildings, along with coins 🪙 and gems 💎 to collect.
+- **Grenades 💣**: hold **G** (or the 💣 button on a tablet) to see the throw arc and blast radius, then release to throw. They bounce off walls, explode after 2.4 s and knock players back. Walls block the blast. The server simulates every grenade, so all players see the same bounces.
+- **Supply drops 📦**: about every 75 s a crate parachutes into the next safe zone, marked by a tall light beam and on the minimap. It gives full shield, +50 health, 2 grenades and 150 points, so expect a fight over it.
+- **Loot bags 💰**: eliminated players drop a bag worth some of their points, plus a grenade if they had one.
+- **Bounty 👑**: the outright kill leader (2 or more kills) wears a crown and shows on everyone's minimap. Taking them out pays +150 points, which helps players who are behind catch up.
+- **Match mutators**: the host picks one, or leaves it on 🎲 Random for a surprise each round:
+  - 🌙 **Moon Jump**: low gravity
+  - ⏩ **Rush Hour**: the zone moves twice as fast
+  - 💰 **Gold Rush**: double points
+  - 💣 **Boom Town**: start with full grenades, which recharge
+  - ⚡ **Speed Demons**: everyone moves faster
+  - 🔥 **Glass Cannons**: +60% damage
+  - 🎯 **Headhunters**: bigger headshots
+- **Time of day**: each map has its own look (Sunny Noon, Golden Hour, Candy Sunset or Fresh Morning), with a gradient sky, sun, animated water and drifting clouds.
+- **End-of-match awards** (Damage Dealer, Longest Shot, Scavenger King, Demolition) and a **session leaderboard** of wins and kills in the lobby.
+- **Points & shop 🛒**: you earn points from **kills (+100)** and from **scavenging** (coins +20, gems +50, any other loot +10). Spend them at any time in the shop (**B** key, or the 🛒 button on a tablet). It sells medkits, shield cells, Mega Shield, grenades, Power Core (+20% damage), Turbo Shoes (+12% speed), Spring Boots (+30% jump), Extended Mag (+50% magazine) and Radar Ping (shows every enemy on your minimap for 12 s). Points and upgrades reset each match. The server checks every purchase.
 - **Three classes**
 
-| Class | Speed | Weapon | Notes |
-|---|---|---|---|
-| 🔭 **Sniper** | Slow | Bolt-action, 95 dmg, about 2.6× on a headshot | Right-click to scope. Very inaccurate when not scoped. |
-| 🔫 **Rifle** | Medium | Full-auto, 30-round mag | Best at medium range, with damage falloff past about 55 m. Right-click to aim. |
-| 🔪 **Melee** | Very fast | Knife, 55 dmg | **Double jump** plus a **dash** (E or right-click). A **backstab does double damage**. |
+| Class | Speed | Weapon | Passive | Grenades (start / max) |
+|---|---|---|---|---|
+| 🔭 **Sniper** | Slow | Bolt-action, 95 dmg, about 2.6× on a headshot. Right-click to scope; very inaccurate unscoped. | **Spotter**: enemies you hit show on your minimap for 6 s. Your scope **glints** while aimed, so others can spot you. | 1 / 2 |
+| 🔫 **Rifle** | Medium | Full-auto, 30-round mag, damage falloff past about 55 m. Spread grows during long sprays, so fire in bursts. | **Armored**: starts with 50 shield. | 2 / 3 |
+| 🔪 **Melee** | Very fast | Knife, 55 dmg. **Double jump** and **dash** (E or right-click). A **backstab does double**. | **Lifesteal** of +15 HP per hit, takes 15% less damage. | **3 / 6** |
 
-- **Bots** (optional) fill empty slots so you can play with only 2 or 3 people, or practise alone.
+- **Bots** (optional, with Easy, Normal or Hard difficulty) fill empty slots so you can play with only 2 or 3 people, or practise alone. They fight, roam inside the zone and throw grenades.
 
 ---
 
@@ -35,7 +49,7 @@ The launchers check for **Node.js** (version 18 or newer) and try to install it 
 
 ## 👥 Friends joining
 
-Friends connect to the same Wi-Fi or LAN and open the address shown in the lobby (for example `http://192.168.1.23:3000`) in **Chrome, Edge, Firefox or Safari**. On a tablet, touch controls turn on by themselves. The first person to join (normally the host laptop) is the **host 👑**. The host picks the number of bots and presses **START MATCH**. Anyone who joins during a match watches as a spectator and plays in the next round.
+Friends connect to the same Wi-Fi or LAN and open the address shown in the lobby (for example `http://192.168.1.23:3000`) in **Chrome, Edge, Firefox or Safari**. On a tablet, touch controls turn on by themselves. The first person to join (normally the host laptop) is the **host 👑**. The host picks the number of bots, the bot difficulty and the mutator, then presses **START MATCH**. Anyone who joins during a match watches as a spectator and plays in the next round.
 
 ## 🎮 Controls
 
@@ -50,7 +64,8 @@ Friends connect to the same Wi-Fi or LAN and open the address shown in the lobby
 | Crouch | C or Ctrl | **CROUCH** (toggle) |
 | Sprint | Shift | Push the stick fully |
 | Reload | R | **RELOAD** |
-| Shop | B (1–8 to buy) | 🛒 |
+| Grenade | Hold **G** to aim, release to throw | Hold **💣** (drag to aim), release to throw |
+| Shop | B (1–9 to buy) | 🛒 |
 | Scoreboard | Tab | ☰ |
 
 When you're eliminated you spectate the other players. Click or tap to switch who you're watching.
@@ -60,7 +75,7 @@ When you're eliminated you spectate the other players. Click or tap to switch wh
 - Use a different port: `PORT=4000 node server.js` (on Windows: `set PORT=4000 && node server.js`). If port 3000 is busy, the server tries the next free port by itself.
 - Don't open a browser on start: `node server.js --no-open`
 - Force touch controls on or off: add `?touch=1` or `?touch=0` to the URL.
-- Zone timings, class stats, damage, point rewards and shop prices are all in [`public/shared/config.js`](public/shared/config.js).
+- Zone timings, class stats, passives, grenades, mutators, bot difficulty, point rewards and shop prices are all in [`public/shared/config.js`](public/shared/config.js).
 
 ## 🗂 Project layout
 
@@ -69,7 +84,7 @@ server.js              Zero-dependency Node server: static files + WebSocket + a
 public/index.html      Page, lobby and HUD markup
 public/style.css       UI styling
 public/js/main.js      Client: networking, lobby, local player, weapons, HUD, minimap, spectating
-public/js/render.js    three.js rendering: merged city meshes, avatars, effects, zone, viewmodels
+public/js/render.js    three.js rendering: sky and themes, water, merged city meshes, avatars, grenades, effects, zone, viewmodels
 public/js/input.js     Keyboard/mouse (pointer lock) and touch controls
 public/js/audio.js     Synthesised sound effects (WebAudio, no audio files)
 public/shared/         Code shared by server and client: config, map generator, physics

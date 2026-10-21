@@ -30,17 +30,27 @@
           <div id="botRow" class="bot-row">
             <label>Bots <b id="botVal">0</b></label>
             <input type="range" id="botRange" min="0" max="7" step="1" value="3">
+            <select id="botSkill" title="Bot difficulty"></select>
           </div>
+          <div class="opt-row">
+            <label for="mutSelect">Mutator</label>
+            <select id="mutSelect"></select>
+          </div>
+          <div id="mutDesc" class="mut-desc"></div>
           <button id="startBtn" class="big-btn">START MATCH</button>
           <div id="waitMsg" class="wait-msg">Waiting for the host to start...</div>
         </div>
       </div>
+      <div id="sessionBox" class="session hidden">
+        <h3>🏆 Session standings</h3>
+        <table id="sessionTable"></table>
+      </div>
       <details class="help">
         <summary>How to play</summary>
         <div class="help-grid">
-          <div><b>Keyboard + mouse</b><br>WASD move · Mouse look · Left click shoot/stab · Right click aim / scope (Melee: dash) · Space jump (Melee: double jump) · Shift sprint · C / Ctrl crouch · R reload · E dash (Melee) · B shop · Tab scoreboard</div>
-          <div><b>Tablet</b><br>Left thumb: move stick (push fully to sprint) · Right thumb: drag to look · Hold FIRE (drag it to aim while shooting) · AIM/DASH, JUMP, CROUCH, RELOAD buttons</div>
-          <div><b>Goal</b><br>Skydive in, scavenge medkits <span class="ico med"></span>, shields <span class="ico sh"></span>, coins and gems inside buildings, spend 🪙 in the shop (B / 🛒), stay inside the shrinking zone and be the last one standing!</div>
+          <div><b>Keyboard + mouse</b><br>WASD move · Mouse look · Left click shoot/stab · Right click aim / scope (Melee: dash) · Space jump (Melee: double jump) · Shift sprint · C / Ctrl crouch · R reload · E dash (Melee) · <b>hold G</b> aim grenade, release to throw · B shop · Tab scoreboard</div>
+          <div><b>Tablet</b><br>Left thumb: move stick (push fully to sprint) · Right thumb: drag to look · Hold FIRE (drag it to aim while shooting) · AIM/DASH, JUMP, CROUCH, RELOAD buttons · hold 💣 to aim a grenade (drag to adjust), release to throw</div>
+          <div><b>Goal</b><br>Skydive in, scavenge medkits <span class="ico med"></span>, shields <span class="ico sh"></span>, coins and gems inside buildings, spend 🪙 in the shop (B / 🛒), stay inside the shrinking zone and be the last one standing! Grab 📦 supply drops, pick up 💰 loot bags from the fallen, and hunt the 👑 bounty (the kill leader) for bonus points.</div>
         </div>
       </details>
     </div>
@@ -53,7 +63,10 @@
       <div class="pill" id="killCount">💀 0</div>
       <div class="pill" id="zoneInfo">Zone</div>
       <div class="pill pts" id="pointsPill">🪙 0</div>
+      <div class="pill mut" id="mutPill"></div>
     </div>
+    <div id="banner"></div>
+    <div id="dmgNums"></div>
     <div id="ptsPop"></div>
     <canvas id="minimap" width="200" height="200"></canvas>
     <div id="killfeed"></div>
@@ -69,6 +82,7 @@
       <div id="weaponName">Rifle</div>
       <div id="ammo">30 / ∞</div>
       <div id="ability"></div>
+      <div id="nadeCount">💣 0</div>
     </div>
     <div id="zoneVignette"></div>
     <div id="hurtFlash"></div>
@@ -82,7 +96,7 @@
         <div class="pill pts" id="shopPts">🪙 0</div>
         <button id="shopClose" class="shop-close">✕</button>
       </div>
-      <p class="small">Earn 🪙 from kills (+100) and by scavenging coins (+20) and gems (+50) hidden in buildings. Keys 1–8 buy, B closes.</p>
+      <p class="small">Earn 🪙 from kills (+100) and by scavenging coins (+20) and gems (+50) hidden in buildings. Keys 1–9 buy, B closes.</p>
       <div id="shopItems"></div>
       <div id="shopMsg"></div>
     </div>
@@ -99,6 +113,7 @@
   <div id="endScreen" class="hidden screen">
     <div class="lobby-card">
       <h1 id="endTitle" class="win-title">WINNER!</h1>
+      <div id="awards"></div>
       <table id="endTable"></table>
       <p class="small">Back to the lobby in a few seconds…</p>
     </div>
@@ -119,6 +134,7 @@
     <button class="tbtn" id="tReload">RELOAD</button>
     <button class="tbtn small" id="tScore">☰</button>
     <button class="tbtn small" id="tShop">🛒</button>
+    <button class="tbtn" id="tNade">💣</button>
   </div>
 
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
