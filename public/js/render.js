@@ -407,7 +407,9 @@ export class Renderer {
           default: a.gun.rotation.x = -sw * 1.2;
         }
       }
-      a.crown.visible = !!a.bounty;
+      a.crown.visible = !!a.bounty && !a.dc;
+      a.dcIcon.visible = !!a.dc; // player lost connection: their character stands still until they return
+      if (a.dc) a.dcIcon.position.y = 2.75 + Math.sin(this.time * 3) * 0.08;
       if (a.bounty) a.crown.position.y = 2.75 + Math.sin(this.time * 3) * 0.08;
       // sniper scope glint: stays the same size on screen so it can be spotted from far away
       a.glint.visible = !!a.scope;
@@ -938,12 +940,15 @@ function makeAvatar(info, glintTex) {
   const crown = makeEmojiSprite('👑', 0.75);
   crown.visible = false;
   root.add(crown);
+  const dcIcon = makeEmojiSprite('📶', 0.6);
+  dcIcon.visible = false;
+  root.add(dcIcon);
   // sniper scope glint
   const glint = new THREE.Sprite(new THREE.SpriteMaterial({ map: glintTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }));
   glint.position.set(0.15, 1.62, -0.6);
   glint.visible = false;
   body.add(glint);
-  return { root, body, legL, legR, gun, chute, tag, crown, glint, cls: info.cls, swingT: 0, pitch: 0 };
+  return { root, body, legL, legR, gun, chute, tag, crown, dcIcon, glint, cls: info.cls, swingT: 0, pitch: 0 };
 }
 
 function boxMesh(w, h, d, mat, x, y, z) {

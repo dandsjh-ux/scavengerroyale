@@ -161,6 +161,7 @@ function buildMap() {
 }
 
 const humans = () => [...players.values()].filter((p) => !p.isBot);
+const connected = () => humans().filter((p) => p.ws); // humans whose browser is currently connected
 const inMatch = () => [...players.values()].filter((p) => p.inMatch);
 const aliveList = () => [...players.values()].filter((p) => p.inMatch && p.alive);
 
@@ -235,7 +236,7 @@ function broadcast(msg, except) {
 }
 
 function pickHost() {
-  const h = humans().sort((a, b) => a.joinedAt - b.joinedAt);
+  const h = connected().sort((a, b) => a.joinedAt - b.joinedAt);
   game.hostId = h.length ? h[0].id : null;
 }
 
@@ -244,7 +245,7 @@ function lobbyState() {
     t: 'lobby', phase: game.phase, seed: game.seed, host: game.hostId, bots: game.bots,
     mutator: game.mutator, botSkill: game.botSkill, settings: game.settings,
     session: [...session.values()].sort((a, b) => b.wins - a.wins || b.kills - a.kills).slice(0, 8),
-    players: [...players.values()].map((p) => ({ id: p.id, name: p.name, cls: p.cls, color: p.color, bot: p.isBot, inMatch: p.inMatch })),
+    players: [...players.values()].map((p) => ({ id: p.id, name: p.name, cls: p.cls, color: p.color, bot: p.isBot, inMatch: p.inMatch, dc: !p.isBot && !p.ws })),
   };
 }
 
@@ -255,8 +256,12 @@ function onConnection(ws, addr) {
     let m; try { m = JSON.parse(raw); } catch { return; }
     if (!me) {
       if (m.t !== 'hello') return;
+      const token = typeof m.token === 'string' ? m.token.slice(0, 64) : '';
+      // Same browser coming back (closed tab, network drop): take over the existing player.
+      const back = token && [...players.values()].find((p) => !p.isBot && p.token === token);
+      if (back) { me = back; reconnect(me, ws, addr); return; }
       if (humans().length >= MAX_PLAYERS) { ws.send(JSON.stringify({ t: 'full' })); ws.socket.end(); return; }
-      me = makePlayer({ ws, name: cleanName(m.name), cls: CLASSES[m.cls] ? m.cls : 'rifle' });
+      me = makePlayer({ ws, token, name: cleanName(m.name), cls: CLASSES[m.cls] ? m.cls : 'rifle' });
       players.set(me.id, me);
       if (game.hostId == null) pickHost();
       console.log(`  + ${me.name} joined from ${addr.replace('::ffff:', '')}`);
@@ -270,15 +275,51 @@ function onConnection(ws, addr) {
     handle(me, m);
   });
   ws.on('close', () => {
-    if (!me) return;
+    if (!me || me.ws !== ws) return; // an older socket of a player who already reconnected
+    if (game.phase !== 'lobby' && me.inMatch) {
+      // Keep their character in the match so they can resume when they come back.
+      console.log(`  ~ ${me.name} lost connection (can rejoin)`);
+      me.ws = null; me.dcAt = Date.now();
+      me.crouch = 0; me.scope = 0;
+      if (me.glide) { // don't leave them hanging in the sky: drop them onto whatever is below
+        const below = game.world.raycast(me.x, me.y, me.z, 0, -1, 0, 300);
+        me.y = Math.max(0, me.y - below); me.glide = 0;
+      }
+      broadcast({ t: 'dc', id: me.id, on: 1 });
+      checkEnd(); // a knocked-out player who leaves no longer blocks the end of the match
+      if (game.hostId === me.id) pickHost();
+      broadcast(lobbyState());
+      return;
+    }
     console.log(`  - ${me.name} left`);
     if (me.inMatch && me.alive) killPlayer(me, null, 'left');
     players.delete(me.id);
     checkEnd(); // they may have been waiting to respawn
     if (game.hostId === me.id) pickHost();
-    if (humans().length === 0) resetToLobby();
+    if (connected().length === 0) resetToLobby();
     broadcast(lobbyState());
   });
+}
+
+function reconnect(p, ws, addr) {
+  if (p.ws && p.ws !== ws) { const old = p.ws; p.ws = null; old.socket.destroy(); } // e.g. a second tab
+  p.ws = ws; p.dcAt = 0;
+  console.log(`  + ${p.name} reconnected from ${addr.replace('::ffff:', '')}`);
+  pickHost();
+  send(p, { t: 'welcome', id: p.id, addresses: lanAddresses(), port: actualPort, name: p.name });
+  if (game.phase === 'playing' && p.inMatch) {
+    const livesLeft = SET().lives === 0 ? -1 : Math.max(0, SET().lives - p.livesUsed);
+    send(p, {
+      t: 'resume', seed: game.seed, mut: game.mut, pickups: game.pickups.map(pickupWire), cls: p.cls,
+      pos: [r2(p.x), r2(p.y), r2(p.z)], yaw: p.yaw, glide: p.glide, alive: p.alive, hp: Math.ceil(p.hp), shield: Math.ceil(p.shield),
+      kills: p.kills, pts: p.points, up: p.up, nades: p.nades, maxNades: maxNades(p), lk: game.locked ? 1 : 0,
+      respawnIn: p.respawnAt != null ? Math.max(0, r2(p.respawnAt - game.time)) : 0, lives: livesLeft, place: p.place,
+    });
+    broadcast({ t: 'dc', id: p.id, on: 0 }, p);
+  } else if (game.phase === 'playing') {
+    send(p, { t: 'start', seed: game.seed, spectator: true, mut: game.mut, pickups: game.pickups.map(pickupWire) });
+  }
+  broadcast(lobbyState());
 }
 
 function cleanName(n) {
@@ -475,7 +516,8 @@ function applyDamage(v, amount, attacker, weapon, head = false, backstab = false
   return killed;
 }
 
-const remaining = () => [...players.values()].filter((p) => p.inMatch && (p.alive || p.respawnAt != null));
+// Still in the running: alive, or waiting to respawn (a disconnected player only counts while their body is alive).
+const remaining = () => [...players.values()].filter((p) => p.inMatch && (p.alive || (p.respawnAt != null && (p.isBot || p.ws))));
 
 function canRespawn(v, weapon) {
   const S = SET();
@@ -699,8 +741,9 @@ function endMatch(winner) {
 }
 
 function resetToLobby() {
+  game.emptySince = 0;
   for (const p of [...players.values()]) {
-    if (p.isBot) players.delete(p.id);
+    if (p.isBot || !p.ws) players.delete(p.id); // bots, and players who never came back
     else { p.inMatch = false; p.alive = false; p.respawnAt = null; }
   }
   game.phase = 'lobby';
@@ -834,7 +877,9 @@ setInterval(() => {
     updateNades(dt);
     if (game.time >= game.nextDropAt && game.zone.stage !== 'closed') { spawnSupplyDrop(); game.nextDropAt = game.time + SET().drops; }
     if (isLocked() && !game.locked) { game.locked = true; broadcast({ t: 'lock' }); }
-    for (const p of inMatch()) if (!p.alive && p.respawnAt != null && game.time >= p.respawnAt) respawnPlayer(p);
+    for (const p of inMatch()) {
+      if (!p.alive && p.respawnAt != null && game.time >= p.respawnAt && (p.isBot || p.ws)) respawnPlayer(p); // held until they reconnect
+    }
     // bounty: the outright kill leader (2+ kills) is marked for everyone
     const leader = aliveList().reduce((a, p) => (p.kills > (a ? a.kills : 1) ? p : a), null);
     const tied = leader && aliveList().some((p) => p !== leader && p.kills === leader.kills);
@@ -891,11 +936,17 @@ setInterval(() => {
       lk: game.locked ? 1 : 0,
       a: aliveList().length,
       b: game.bountyId,
-      p: inMatch().map((p) => [p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.crouch, p.glide, p.alive ? 1 : 0, Math.max(0, Math.ceil(p.hp)), Math.ceil(p.shield), p.kills, p.scope, p.respawnAt != null ? 1 : 0]),
+      p: inMatch().map((p) => [p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.crouch, p.glide, p.alive ? 1 : 0, Math.max(0, Math.ceil(p.hp)), Math.ceil(p.shield), p.kills, p.scope, p.respawnAt != null ? 1 : 0, !p.isBot && !p.ws ? 1 : 0]),
     };
     broadcast(snap);
   }
   if (game.phase === 'ended' && Date.now() > game.endAt) resetToLobby();
+  // everyone dropped out mid-match: give them 2 minutes to come back before closing the match
+  if (game.phase !== 'lobby' && players.size) {
+    if (connected().length) game.emptySince = 0;
+    else if (!game.emptySince) game.emptySince = Date.now();
+    else if (Date.now() - game.emptySince > 120000) resetToLobby();
+  }
 }, TICK * 1000);
 
 // ------------------------------------------------------------------ startup

@@ -45,24 +45,40 @@ const NADE_DT = 0.05; // grenades are stepped at the server's tick rate so clien
 const gScale = () => mut(S.mut).gravity || 1;
 
 // ------------------------------------------------------------------ networking
+// A private token kept in this browser lets the server recognise you if you reconnect mid-match
+// (closed the tab by accident, Wi-Fi dropped...), so you resume your own character.
+let token = store.get('sr_token', '');
+if (!token) { token = Array.from({ length: 4 }, () => Math.random().toString(36).slice(2, 10)).join(''); store.set('sr_token', token); }
+
 function connect() {
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`);
   S.ws = ws;
-  ws.onopen = () => { $('connMsg').classList.add('hidden'); send({ t: 'hello', name: S.name, cls: S.cls }); };
+  ws.onopen = () => { $('connMsg').classList.add('hidden'); send({ t: 'hello', name: S.name, cls: S.cls, token }); };
   ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } onMessage(m); };
   ws.onclose = () => {
     if (S.full) return;
-    $('connMsg').textContent = 'Disconnected from server — retrying…';
+    $('connMsg').textContent = S.phase === 'playing' && S.inMatch
+      ? '📶 Connection lost — reconnecting… your character is still in the match'
+      : 'Disconnected from server — retrying…';
     $('connMsg').classList.remove('hidden');
-    S.myId = null;
-    setTimeout(connect, 2000);
+    input.fire = false;
+    setTimeout(connect, 1500);
   };
 }
 function send(m) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(m)); }
 
 function onMessage(m) {
   switch (m.t) {
-    case 'welcome': S.myId = m.id; S.addresses = m.addresses || []; S.port = m.port; renderJoinInfo(); break;
+    case 'welcome':
+      S.myId = m.id; S.addresses = m.addresses || []; S.port = m.port; renderJoinInfo();
+      if (m.name && m.name !== S.name) { S.name = m.name; nameInput.value = m.name; store.set('sr_name', m.name); }
+      break;
+    case 'resume': onResume(m); break;
+    case 'dc': {
+      const i = S.info.get(m.id);
+      if (i) feedLine(m.on ? `📶 <b style="color:${i.color}">${esc(i.name)}</b> lost connection` : `✅ <b style="color:${i.color}">${esc(i.name)}</b> is back`);
+      break;
+    }
     case 'full': S.full = true; $('connMsg').textContent = 'Server is full (8 players max).'; $('connMsg').classList.remove('hidden'); break;
     case 'lobby': onLobby(m); break;
     case 'start': onStart(m); break;
@@ -206,7 +222,7 @@ function onLobby(m) {
   for (const p of m.players) {
     const li = document.createElement('li');
     li.style.setProperty('--c', p.color);
-    li.innerHTML = `${p.id === m.host ? '👑 ' : ''}${esc(p.name)}${p.id === S.myId ? ' <i>(you)</i>' : ''}<span class="cls">${CLASSES[p.cls].name}</span>`;
+    li.innerHTML = `${p.id === m.host ? '👑 ' : ''}${esc(p.name)}${p.id === S.myId ? ' <i>(you)</i>' : ''}${p.dc ? ' <i>📶 reconnecting</i>' : ''}<span class="cls">${CLASSES[p.cls].name}</span>`;
     list.appendChild(li);
   }
   const humans = m.players.filter((p) => !p.bot).length;
@@ -317,6 +333,56 @@ function showRespawnBox() {
 }
 $('respawnShop').addEventListener('click', (e) => { e.stopPropagation(); openShop(); });
 
+// Rejoining a match in progress after a disconnect: rebuild our state from the server's copy.
+function onResume(m) {
+  buildWorld(m.seed);
+  R.setPickups(m.pickups || []);
+  R.clearNades(); S.nadeSims.clear();
+  const pageSurvived = S.phase === 'playing' && S.inMatch && S.me && S.me.alive && m.alive;
+  S.phase = 'playing'; S.inMatch = true;
+  S.mut = m.mut || 'classic';
+  const mu = mut(S.mut);
+  $('mutPill').textContent = S.mut === 'classic' ? '' : `${mu.icon} ${mu.name}`;
+  if (CLASSES[m.cls]) S.cls = m.cls;
+  S.points = m.pts; S.up = m.up; S.locked = !!m.lk; S.myKills = m.kills; S.livesLeft = m.lives;
+  ['lobby', 'endScreen'].forEach((id) => $(id).classList.add('hidden'));
+  $('hud').classList.remove('hidden');
+  if (m.alive) {
+    if (!pageSurvived) {
+      spawnLocal(m.pos, m.yaw, m.kills);
+      S.me.glide = !!m.glide;
+      if (!m.glide) S.me.pitch = 0;
+    }
+    S.me.hp = m.hp; S.me.shield = m.shield; S.me.kills = m.kills;
+    S.nades = m.nades; S.maxNades = m.maxNades;
+  } else {
+    S.me = { x: m.pos[0], y: m.pos[1], z: m.pos[2], vx: 0, vy: 0, vz: 0, alive: false, hp: 0, shield: 0, kills: m.kills, yaw: m.yaw, pitch: 0, eye: EYE_HEIGHT };
+    S.nades = m.nades; S.maxNades = m.maxNades;
+    $('touch').classList.add('hidden'); $('clickToPlay').classList.add('hidden');
+    $('deathScreen').classList.remove('hidden');
+    if (m.respawnIn > 0 || m.place === 0) {
+      S.respawnAt = performance.now() / 1000 + m.respawnIn;
+      $('deathTitle').textContent = 'KNOCKED OUT';
+      $('deathSub').textContent = 'You reconnected while waiting to respawn.';
+      showRespawnBox();
+    } else {
+      S.respawnAt = 0;
+      $('deathTitle').textContent = 'ELIMINATED';
+      $('deathSub').innerHTML = `You were knocked out while away — you placed <b>#${m.place}</b>`;
+      $('respawnBox').classList.add('hidden');
+    }
+  }
+  banner('📶 Reconnected — welcome back!');
+}
+
+function feedLine(html) {
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  $('killfeed').prepend(div);
+  setTimeout(() => div.remove(), 6000);
+  while ($('killfeed').children.length > 6) $('killfeed').lastChild.remove();
+}
+
 function onRespawn(m) {
   if (!S.inMatch) return;
   if (CLASSES[m.cls]) S.cls = m.cls;
@@ -333,8 +399,8 @@ function onSnap(m) {
   R.setZone(m.z);
   const seen = new Set();
   for (const e of m.p) {
-    const [id, x, y, z, yw, pt, cr, gl, alive, hp, sh, kills, sc, pend] = e;
-    S.snap.set(id, { id, x, y, z, yaw: yw, pitch: pt, crouch: cr, glide: gl, alive, hp, shield: sh, kills, pending: pend });
+    const [id, x, y, z, yw, pt, cr, gl, alive, hp, sh, kills, sc, pend, dc] = e;
+    S.snap.set(id, { id, x, y, z, yaw: yw, pitch: pt, crouch: cr, glide: gl, alive, hp, shield: sh, kills, pending: pend, dc });
     seen.add(id);
     if (id === S.myId) {
       if (S.me && S.me.alive) { S.me.hp = hp; S.me.shield = sh; }
@@ -345,7 +411,7 @@ function onSnap(m) {
     if (!info) continue;
     if (!alive) { R.removeAvatar(id); continue; }
     const a = R.ensureAvatar(info);
-    a.target.set(x, y, z); a.targetYaw = yw; a.crouch = cr; a.glide = gl; a.pitch = pt; a.scope = sc; a.bounty = id === S.bountyId;
+    a.target.set(x, y, z); a.targetYaw = yw; a.crouch = cr; a.glide = gl; a.pitch = pt; a.scope = sc; a.bounty = id === S.bountyId; a.dc = !!dc;
   }
   for (const id of [...R.avatars.keys()]) if (!seen.has(id)) R.removeAvatar(id);
   for (const id of [...S.snap.keys()]) if (!seen.has(id)) S.snap.delete(id);
@@ -1087,7 +1153,7 @@ function updateHud(dt) {
     const rows = [...S.snap.values()].sort((a, b) => b.alive - a.alive || b.kills - a.kills);
     $('scoreTable').innerHTML = '<tr><th>Player</th><th>Class</th><th>Kills</th><th></th></tr>' + rows.map((p) => {
       const i = S.info.get(p.id) || { name: '?', cls: 'rifle', color: '#fff' };
-      return `<tr class="${p.alive ? '' : 'dead'}"><td><span class="swatch" style="background:${i.color}"></span>${esc(i.name)}${p.id === S.myId ? ' (you)' : ''}</td><td>${CLASSES[i.cls].name}</td><td>${p.kills}</td><td>${p.alive ? '' : p.pending ? '⏳' : '💀'}</td></tr>`;
+      return `<tr class="${p.alive ? '' : 'dead'}"><td><span class="swatch" style="background:${i.color}"></span>${esc(i.name)}${p.id === S.myId ? ' (you)' : ''}</td><td>${CLASSES[i.cls].name}</td><td>${p.kills}</td><td>${p.dc ? '📶 ' : ''}${p.alive ? '' : p.pending ? '⏳' : '💀'}</td></tr>`;
     }).join('');
   } else sb.classList.add('hidden');
 }

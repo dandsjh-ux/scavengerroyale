@@ -114,6 +114,16 @@ Each moment picks one of its takes at random. A **🔊 Voice** volume slider is 
 
 When you're eliminated you spectate the other players. Click or tap to switch who you're watching.
 
+### 📶 Dropped out? Just rejoin
+
+If you close the window by accident or your internet drops, **open the game link again in the same browser** to jump straight back into the match:
+- **What's kept:** your health, shield, points, upgrades, grenades, kills and respawn timer.
+- **While you're away:** your character stays where you left it, and other players see a 📶 icon over it. It can still be hit, and the zone still hurts it, so nobody can disconnect to escape a fight.
+- **If you were waiting to respawn:** the respawn is held until you're back.
+- **If everyone disconnects:** the match waits 2 minutes before returning to the lobby.
+
+This works because each browser keeps a private player token. A different browser or device joins as a new player.
+
 ## ⚙ Options
 
 - Use a different port: `PORT=4000 node server.js` (on Windows: `set PORT=4000 && node server.js`). If port 3000 is busy, the server tries the next free port by itself.
