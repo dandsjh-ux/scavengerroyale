@@ -1,0 +1,14 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# In the Render dashboard choose New > Blueprint, pick this repository, and Render creates the service.
+services:
+  - type: web
+    name: scavenger-royale
+    runtime: node
+    plan: free            # free instances sleep after ~15 min idle; the first visit then takes ~1 min to wake
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

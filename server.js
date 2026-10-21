@@ -21,8 +21,10 @@ import { World, stepBody, stepGrenade, lineOfSight } from './public/shared/physi
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
-const START_PORT = Number(process.env.PORT) || 3000;
-const NO_OPEN = process.argv.includes('--no-open') || process.env.NO_OPEN;
+const START_PORT = Number(process.env.PORT) || 3000; // Render (and most hosts) provide PORT
+// Hosted on a cloud platform such as Render (it sets RENDER=true and PORT for us)?
+const HOSTED = !!(process.env.RENDER || process.env.HOSTED);
+const NO_OPEN = HOSTED || process.argv.includes('--no-open') || process.env.NO_OPEN;
 
 // ------------------------------------------------------------------ HTTP
 const MIME = {
@@ -32,6 +34,7 @@ const MIME = {
 
 const server = http.createServer((req, res) => {
   let p = decodeURIComponent((req.url || '/').split('?')[0]);
+  if (p === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('ok'); return; }
   if (p === '/') p = '/index.html';
   const file = path.normalize(path.join(PUBLIC, p));
   if (!file.startsWith(PUBLIC)) { res.writeHead(403); res.end(); return; }
@@ -917,6 +920,10 @@ function listen(port, triesLeft) {
   });
   server.listen(port, '0.0.0.0', () => {
     actualPort = port;
+    if (HOSTED) {
+      console.log(`  SCAVENGER ROYALE server listening on port ${port} (hosted mode)`);
+      return;
+    }
     const ips = lanAddresses();
     const line = '='.repeat(60);
     console.log(`\n${line}\n  SCAVENGER ROYALE server is running!\n${line}`);
@@ -935,4 +942,7 @@ function openBrowser(url) {
   exec(cmd, () => {});
 }
 
-listen(START_PORT, 10);
+// Cloud proxies close WebSockets that stay silent (e.g. in the lobby), so ping every 25 s.
+setInterval(() => { for (const p of players.values()) if (p.ws) p.ws.sendFrame(0x9, Buffer.alloc(0)); }, 25000);
+
+listen(START_PORT, HOSTED ? 0 : 10);

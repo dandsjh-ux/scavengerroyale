@@ -48,6 +48,23 @@ The launchers check for **Node.js** (version 18 or newer) and try to install it 
 
 > **Windows Firewall:** on the first run Windows asks whether Node.js may use the network. Tick **Private networks** and click **Allow access**. If you clicked Cancel by mistake, open *Windows Defender Firewall ▸ Allow an app* and enable Node.js for Private networks.
 
+## ☁️ Deploy online with Render (play over the internet)
+
+The same code runs as a web service on [Render](https://render.com), so friends anywhere can join from a link without being on your Wi-Fi.
+
+1. Make sure the code you want is on the branch Render will use. Either merge this branch into `main`, or pick this branch in step 3.
+2. Sign in at [dashboard.render.com](https://dashboard.render.com) and connect your GitHub account.
+3. Choose **New ▸ Blueprint**, select this repository (and branch), and click **Apply**. Render reads [`render.yaml`](render.yaml) and creates a **web service** named `scavenger-royale`.
+   - To do it by hand instead, choose **New ▸ Web Service** with runtime **Node**, build command `npm install --omit=dev`, start command `npm start` and health check path `/healthz`.
+4. When the deploy finishes, open the `https://scavenger-royale-xxxx.onrender.com` link Render shows. The lobby displays that link for your friends to join.
+
+Notes:
+- **Free plan:** the service sleeps after about 15 minutes with nobody connected. The next visit takes about a minute to wake it up. A paid instance stays awake.
+- **Settings:** host settings are saved to `settings.json` on the server. Render's disk is wiped on every deploy or restart, so settings go back to the defaults then.
+- **Anyone with the link can join:** there's one room for up to 8 players. Only share the link with people you want in your game.
+- **Hosting setup:** the server detects Render automatically (`RENDER`/`PORT` environment variables), so it skips opening a browser. It answers health checks on `/healthz` and pings every 25 seconds so idle lobby connections stay open. To use another host, set `HOSTED=1` and `PORT`.
+- **Lag:** online play adds internet latency, so a nearby Render region (set in the dashboard) feels best. LAN play with the start-file launchers still works exactly as before.
+
 ## 👥 Friends joining
 
 Friends connect to the same Wi-Fi or LAN and open the address shown in the lobby (for example `http://192.168.1.23:3000`) in **Chrome, Edge, Firefox or Safari**. On a tablet, touch controls turn on by themselves. The first person to join (normally the host laptop) is the **host 👑**. The host picks the number of bots, the bot difficulty and the mutator, then presses **START MATCH**. Anyone who joins during a match watches as a spectator and plays in the next round.
@@ -108,6 +125,7 @@ When you're eliminated you spectate the other players. Click or tap to switch wh
 
 ```
 server.js              Zero-dependency Node server: static files + WebSocket + authoritative match logic + bots
+render.yaml            Render Blueprint for one-click cloud deployment
 public/index.html      Page, lobby and HUD markup
 public/style.css       UI styling
 public/js/main.js      Client: networking, lobby, local player, weapons, HUD, minimap, spectating

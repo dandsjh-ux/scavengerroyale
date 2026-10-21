@@ -183,7 +183,11 @@ function renderJoinInfo() {
   const host = location.hostname;
   const lan = S.addresses.length ? S.addresses : [];
   const isLocal = host === 'localhost' || host === '127.0.0.1';
-  const urls = (isLocal ? lan : [host]).map((ip) => `<code>http://${ip}:${port}</code>`);
+  if (!isLocal) { // hosted online, or already opened via a LAN address: share this exact page
+    $('joinInfo').innerHTML = `Friends join at: <code>${location.origin}</code>`;
+    return;
+  }
+  const urls = lan.map((ip) => `<code>http://${ip}:${port}</code>`);
   $('joinInfo').innerHTML = urls.length
     ? `Friends on the same Wi-Fi join at: ${urls.join(' or ')}`
     : 'No network address found — connect this computer to Wi-Fi/LAN so friends can join.';
