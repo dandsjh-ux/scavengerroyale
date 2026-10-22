@@ -3,6 +3,7 @@ import {
   CLASSES, BODY_HEIGHT, CROUCH_HEIGHT, EYE_HEIGHT, CROUCH_EYE, GLIDE_FALL_SPEED, GLIDE_MOVE_SPEED, MAX_HP, MAX_SHIELD, MAP_HALF,
   SHOP_ITEMS, SPEED_UPGRADE, JUMP_UPGRADE, MAG_UPGRADE, RADAR_TIME, GRENADE, MUTATORS, mut, BOT_SKILL,
   KNIFE, SETTINGS, defaultSettings, allowedClasses, SHOP_NEEDS_ALIVE,
+  STREAKS, AIRSTRIKE, JETPACK, GRAVITY,
 } from '../shared/config.js';
 import { generateMap } from '../shared/map.js';
 import { World, stepBody, stepGrenade, raySphere, rayBox, lineOfSight } from '../shared/physics.js';
@@ -40,6 +41,7 @@ const S = {
   mut: 'classic', bountyId: null, marks: new Map(), bloom: 0, fovKick: 0,
   settings: defaultSettings(), locked: false, myKills: 0, respawnAt: 0, livesLeft: -1,
   combo: 0, comboLast: 0, lastSlam: 0, lastKnifeThrow: 0,
+  streak: 0, rewards: {}, wallhackUntil: 0, strikes: [], strikeOpen: false, jetFuel: 0, lastJumpPress: -9,
 };
 const NADE_DT = 0.05; // grenades are stepped at the server's tick rate so client and server paths match
 const gScale = () => mut(S.mut).gravity || 1;
@@ -98,6 +100,9 @@ function onMessage(m) {
     case 'drop': banner('📦 Supply drop incoming! Check your minimap'); SFX.sfxDrop(); break;
     case 'bounty': onBounty(m); break;
     case 'respawn': onRespawn(m); break;
+    case 'streak': onStreak(m); break;
+    case 'streakOn': onStreakOn(m); break;
+    case 'strike': onStrike(m); break;
     case 'lock':
       S.locked = true; closeShop();
       banner(`🔒 Final circles! ${S.settings.respawn === 'on' ? 'Respawns' : 'Eliminations are final'} and the shop are now closed`);
@@ -268,6 +273,7 @@ function onStart(m) {
   R.clearNades(); R.clearEffects(); S.nadeSims.clear();
   S.mut = m.mut || 'classic'; S.bountyId = null; S.marks.clear(); S.bloom = 0;
   S.locked = false; S.myKills = 0; S.respawnAt = 0; S.combo = 0; S.lastSlam = 0; S.lastKnifeThrow = 0;
+  S.streak = 0; S.rewards = {}; S.wallhackUntil = 0; S.strikes = []; S.jetFuel = 0; closeStrikeMap();
   const mu = mut(S.mut);
   $('mutPill').textContent = S.mut === 'classic' ? '' : `${mu.icon} ${mu.name}`;
   if (S.mut !== 'classic') setTimeout(() => banner(`${mu.icon} ${mu.name}: ${mu.desc}`), 4500);
@@ -345,6 +351,7 @@ function onResume(m) {
   $('mutPill').textContent = S.mut === 'classic' ? '' : `${mu.icon} ${mu.name}`;
   if (CLASSES[m.cls]) S.cls = m.cls;
   S.points = m.pts; S.up = m.up; S.locked = !!m.lk; S.myKills = m.kills; S.livesLeft = m.lives;
+  S.streak = m.streak || 0; S.rewards = m.rewards || {}; S.jetFuel = m.jetFuel || 0;
   ['lobby', 'endScreen'].forEach((id) => $(id).classList.add('hidden'));
   $('hud').classList.remove('hidden');
   if (m.alive) {
@@ -396,10 +403,11 @@ function onRespawn(m) {
 // ------------------------------------------------------------------ snapshots & events
 function onSnap(m) {
   S.zone = m.z; S.aliveCount = m.a; S.bountyId = m.b ?? null; S.locked = !!m.lk;
+  R.syncTurrets(m.tu, (id) => (S.info.get(id) || { color: '#999999' }).color);
   R.setZone(m.z);
   const seen = new Set();
   for (const e of m.p) {
-    const [id, x, y, z, yw, pt, cr, gl, alive, hp, sh, kills, sc, pend, dc] = e;
+    const [id, x, y, z, yw, pt, cr, gl, alive, hp, sh, kills, sc, pend, dc, jet] = e;
     S.snap.set(id, { id, x, y, z, yaw: yw, pitch: pt, crouch: cr, glide: gl, alive, hp, shield: sh, kills, pending: pend, dc });
     seen.add(id);
     if (id === S.myId) {
@@ -411,7 +419,7 @@ function onSnap(m) {
     if (!info) continue;
     if (!alive) { R.removeAvatar(id); continue; }
     const a = R.ensureAvatar(info);
-    a.target.set(x, y, z); a.targetYaw = yw; a.crouch = cr; a.glide = gl; a.pitch = pt; a.scope = sc; a.bounty = id === S.bountyId; a.dc = !!dc;
+    a.target.set(x, y, z); a.targetYaw = yw; a.crouch = cr; a.glide = gl; a.pitch = pt; a.scope = sc; a.bounty = id === S.bountyId; a.dc = !!dc; a.jet = jet;
   }
   for (const id of [...R.avatars.keys()]) if (!seen.has(id)) R.removeAvatar(id);
   for (const id of [...S.snap.keys()]) if (!seen.has(id)) S.snap.delete(id);
@@ -434,7 +442,7 @@ function onFx(m) {
   }
 }
 
-const WEAPON_ICON = { sniper: '🔭', rifle: '🔫', melee: '🔪', throw: '🗡️', nade: '💣', zone: '☠️', left: '🚪' };
+const WEAPON_ICON = { sniper: '🔭', rifle: '🔫', melee: '🔪', throw: '🗡️', nade: '💣', turret: '🤖', strike: '✈️', zone: '☠️', left: '🚪' };
 function onKill(m) {
   const k = m.k != null ? S.info.get(m.k) : null, v = S.info.get(m.v);
   const va = R.avatars.get(m.v);
@@ -458,7 +466,8 @@ function onKill(m) {
     flashCenter(`Eliminated ${v ? esc(v.name) : ''}`, m.bounty ? '👑 BOUNTY CLAIMED! +150 🪙' : m.hs ? 'HEADSHOT!' : '', 2);
   } else if (m.bounty && k) banner(`👑 ${k.name} claimed the bounty on ${v ? v.name : '?'}`);
   if (m.v === S.myId && S.me) {
-    S.me.alive = false; S.me.hp = 0; S.me.shield = 0;
+    S.me.alive = false; S.me.hp = 0; S.me.shield = 0; S.me.jet = false; S.jetFuel = 0;
+    closeStrikeMap(); $('streakMenu').classList.add('hidden');
     closeShop();
     input.unlock();
     voice('eliminated');
@@ -504,6 +513,7 @@ function onHitMarker(m) {
   h.className = ''; void h.offsetWidth;
   h.className = 'show' + (m.kill ? ' kill' : m.head ? ' head' : '');
   SFX.sfxHit(m.head);
+  if (m.turret) { if (m.kill) flashCenter('🤖 Turret destroyed!', '', 1.2); return; }
   if (m.back) flashCenter('BACKSTAB!', '', 1);
   else if (m.kind && m.kind !== 'slash' && m.kind !== 'backhand') flashCenter({ finisher: 'FINISHER!', lunge: 'LUNGE!', slam: 'SLAM!', throw: 'KNIFE THROW!' }[m.kind], '', 0.8);
   const a = R.avatars.get(m.v);
@@ -647,7 +657,7 @@ function updateLocal(dt) {
   let wx = -sy * mv.y + cy * mv.x, wz = -cy * mv.y - sy * mv.x;
 
   // crouch (stay crouched if there's no head room)
-  let crouching = input.crouch && !me.glide;
+  let crouching = input.crouch && !me.glide && !me.jet;
   if (!crouching && me.h < BODY_HEIGHT) {
     const r = 0.34;
     if (S.world.anyOverlap(me.x - r, me.y + CROUCH_HEIGHT, me.z - r, me.x + r, me.y + BODY_HEIGHT, me.z + r)) crouching = true;
@@ -663,6 +673,7 @@ function updateLocal(dt) {
   if (sprinting) speed *= 1.3;
   if (crouching) speed *= 0.5;
   if (S.aimK > 0.5) speed *= 0.6;
+  if (me.jet) speed *= JETPACK.speedMult;
 
   me.dashCd = Math.max(0, me.dashCd - dt);
   if (me.glide) {
@@ -672,14 +683,27 @@ function updateLocal(dt) {
     me.dashT -= dt;
     me.vx = me.dashX * cls.dash.speed; me.vz = me.dashZ * cls.dash.speed;
   } else {
-    const k = Math.min(1, dt * (me.onGround ? 14 : 3.5));
+    const k = Math.min(1, dt * (me.onGround || me.jet ? 14 : 3.5));
     me.vx += (wx * speed - me.vx) * k; me.vz += (wz * speed - me.vz) * k;
   }
 
   const jumpV = cls.jump * Math.sqrt(1 + JUMP_UPGRADE * S.up.jump);
   if (input.take('jump') && !me.glide) {
-    if (me.onGround) { me.vy = jumpV; SFX.sfxJump(); }
+    if (me.jet) { me.jet = false; flashCenter('🚀 Jetpack off', '', 0.8); }
+    else if (S.jetFuel > 0 && now - S.lastJumpPress < JETPACK.doubleTap) { // double-tap: take off
+      me.jet = true; me.jetT = 0; me.vy = Math.max(me.vy, JETPACK.lift); me.slamming = false; SFX.sfxDash();
+    } else if (me.onGround) { me.vy = jumpV; SFX.sfxJump(); }
     else if (cls.doubleJump && me.canDouble) { me.vy = jumpV * 0.9; me.canDouble = false; SFX.sfxJump(); }
+    S.lastJumpPress = now;
+  }
+  if (me.jet) {
+    me.jetT += dt;
+    S.jetFuel = Math.max(0, S.jetFuel - dt);
+    let target = me.jetT < JETPACK.liftTime ? JETPACK.lift : input.crouch ? -JETPACK.descend : 0;
+    if (me.y > JETPACK.ceiling) target = Math.min(target, 0);
+    me.vy += (target - me.vy) * Math.min(1, dt * 5);
+    me.vy += GRAVITY * gScale() * dt; // cancels the gravity stepBody applies: hover
+    if (S.jetFuel <= 0) { me.jet = false; flashCenter('🚀 Out of fuel!', 'Buy another tank in the shop', 1.5); }
   }
   const dashPressed = input.take('dash') | (S.cls === 'melee' && input.take('aimTap'));
   if (dashPressed && cls.dash && me.dashCd <= 0 && !me.glide) {
@@ -702,6 +726,7 @@ function updateLocal(dt) {
       SFX.sfxSlam(1);
     }
   }
+  if (me.jet && me.onGround && me.jetT > JETPACK.liftTime) me.jet = false; // landed
   if (me.onGround) {
     me.canDouble = true;
     if (me.glide) { me.glide = false; R.shake = 0.5; flashCenter('Landed!', 'Find loot and stay in the zone', 2); }
@@ -715,6 +740,12 @@ function updateLocal(dt) {
   // shop
   if (input.take('shop')) S.shopOpen ? closeShop() : openShop();
   if (S.shopOpen) for (let i = 1; i <= SHOP_ITEMS.length; i++) if (input.take('buy' + i)) buy(SHOP_ITEMS[i - 1].id);
+  // number keys outside the shop fire kill streak rewards
+  if (!S.shopOpen) {
+    for (const k of STREAKS) if (input.take('buy' + k.key)) useStreak(k.id);
+    for (let i = 1; i <= 10; i++) input.take('buy' + i);
+  }
+  if (input.take('streakMenu')) toggleStreakMenu();
 
   // grenades: hold to aim (arc preview), release to throw
   const canNade = !me.glide && !S.shopOpen;
@@ -762,7 +793,8 @@ function updateLocal(dt) {
   S.sendT -= dt;
   if (S.sendT <= 0) {
     S.sendT = 0.05;
-    send({ t: 'st', p: [+me.x.toFixed(2), +me.y.toFixed(2), +me.z.toFixed(2)], yw: +me.yaw.toFixed(3), pt: +me.pitch.toFixed(3), cr: crouching ? 1 : 0, gl: me.glide ? 1 : 0, sc: S.cls === 'sniper' && S.aimK > 0.6 ? 1 : 0 });
+    send({ t: 'st', p: [+me.x.toFixed(2), +me.y.toFixed(2), +me.z.toFixed(2)], yw: +me.yaw.toFixed(3), pt: +me.pitch.toFixed(3), cr: crouching ? 1 : 0, gl: me.glide ? 1 : 0, sc: S.cls === 'sniper' && S.aimK > 0.6 ? 1 : 0,
+      jp: me.jet ? 1 : 0, jf: Math.round(S.jetFuel * 10) / 10 });
   }
   return { moving: Math.hypot(me.vx, me.vz) > 1 && me.onGround, reloadK: reloadProgress(now, w), nadeAim: input.nadeHeld && canNade && S.nades > 0 };
 }
@@ -803,11 +835,13 @@ function doShoot(now, moving) {
     const tb = rayBox(o.x, o.y, o.z, fwd.x, fwd.y, fwd.z, { x0: p.x - 0.4, y0: p.y, z0: p.z - 0.4, x1: p.x + 0.4, y1: p.y + (a.crouch ? 1.0 : 1.42), z1: p.z + 0.4 });
     if (tb >= 0 && tb < best) { best = tb; hit = id; head = false; }
   }
+  const [tBest, hitT] = rayTurrets(o, fwd, best);
+  if (hitT != null) { best = tBest; hit = null; head = false; }
   const end = o.clone().addScaledVector(fwd, best);
   const right = new THREE.Vector3(Math.cos(me.yaw), 0, -Math.sin(me.yaw));
   const muzzle = o.clone().addScaledVector(fwd, 0.8).addScaledVector(right, 0.18 * (1 - S.aimK)).add(new THREE.Vector3(0, -0.12, 0));
   const r2 = (v) => Math.round(v * 100) / 100;
-  send({ t: 'shot', o: [r2(muzzle.x), r2(muzzle.y), r2(muzzle.z)], e: [r2(end.x), r2(end.y), r2(end.z)], hit, head });
+  send({ t: 'shot', o: [r2(muzzle.x), r2(muzzle.y), r2(muzzle.z)], e: [r2(end.x), r2(end.y), r2(end.z)], hit, head, hitT });
   R.addTracer(muzzle.toArray(), end.toArray(), S.cls);
   R.vmFire(S.cls);
   SFX.sfxShot(S.cls, 0.8);
@@ -849,7 +883,25 @@ function doMelee(now) {
     if (!lineOfSight(S.world, me.x, me.y + me.eye, me.z, a.pos.x, a.pos.y + 1.0, a.pos.z)) continue;
     best = id; bd = d;
   }
-  send({ t: 'melee', hit: best, k: kind });
+  let hitT = null; // enemy turrets can be stabbed too
+  for (const [id, t] of R.turrets) {
+    if (t.owner === S.myId) continue;
+    const p = t.root.position, d = Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z);
+    if (d < bd && ((p.x - me.x) * fx + (p.z - me.z) * fz) / (Math.hypot(p.x - me.x, p.z - me.z) || 1) > 0.45) { hitT = id; best = null; bd = d; }
+  }
+  send({ t: 'melee', hit: best, k: kind, hitT });
+}
+
+// Distance and id of the closest enemy turret along a ray (if nearer than `best`).
+function rayTurrets(o, d, best) {
+  let hitT = null;
+  for (const [id, t] of R.turrets) {
+    if (t.owner === S.myId) continue;
+    const p = t.root.position;
+    const tb = rayBox(o.x, o.y, o.z, d.x, d.y, d.z, { x0: p.x - 0.45, y0: p.y, z0: p.z - 0.45, x1: p.x + 0.45, y1: p.y + 1.3, z1: p.z + 0.45 });
+    if (tb >= 0 && tb < best) { best = tb; hitT = id; }
+  }
+  return [best, hitT];
 }
 
 function throwKnife(now) {
@@ -865,10 +917,12 @@ function throwKnife(now) {
     const tb = rayBox(o.x, o.y, o.z, fwd.x, fwd.y, fwd.z, { x0: p.x - 0.4, y0: p.y, z0: p.z - 0.4, x1: p.x + 0.4, y1: p.y + (a.crouch ? 1.0 : 1.42), z1: p.z + 0.4 });
     if (tb >= 0 && tb < best) { best = tb; hit = id; }
   }
+  const [tBest, hitT] = rayTurrets(o, fwd, best);
+  if (hitT != null) { best = tBest; hit = null; }
   const r2 = (v) => Math.round(v * 100) / 100;
   const start = o.clone().addScaledVector(fwd, 0.6).add(new THREE.Vector3(0, -0.1, 0));
   const end = o.clone().addScaledVector(fwd, best);
-  send({ t: 'melee', k: 'throw', hit, o: start.toArray().map(r2), e: end.toArray().map(r2) });
+  send({ t: 'melee', k: 'throw', hit, hitT, o: start.toArray().map(r2), e: end.toArray().map(r2) });
   R.throwKnife(start.toArray(), end.toArray());
   R.vmFire('melee', 'throw');
   SFX.sfxThrow(0.9);
@@ -923,7 +977,7 @@ canvas.addEventListener('click', () => {
 });
 $('clickToPlay').addEventListener('click', () => { SFX.unlockAudio(); input.lock(); });
 document.addEventListener('pointerlockchange', () => {
-  const show = !touch && !input.locked && !S.shopOpen && S.phase === 'playing' && S.me && S.me.alive;
+  const show = !touch && !input.locked && !S.shopOpen && !S.strikeOpen && S.phase === 'playing' && S.me && S.me.alive;
   $('clickToPlay').classList.toggle('hidden', !show);
 });
 
@@ -946,6 +1000,7 @@ function onPoints(m) {
     const item = SHOP_ITEMS.find((i) => i.id === m.bought);
     $('shopMsg').textContent = '';
     if (m.bought === 'radar') S.radarUntil = performance.now() / 1000 + RADAR_TIME;
+    if (m.bought === 'jetpack') { S.jetFuel = JETPACK.fuel; setTimeout(() => flashCenter('🚀 Jetpack ready!', 'Double-tap jump to fly · jump again to land · crouch to sink', 3), 1300); }
     SFX.sfxPickup(m.bought === 'med' ? 'med' : 'shield');
     flashCenter(`Bought ${item.icon} ${item.name}`, '', 1.2);
   }
@@ -972,7 +1027,7 @@ function renderShop() {
     const b = document.createElement('button');
     b.className = 'shop-item';
     b.disabled = maxed || blocked || needsAlive || S.points < cost;
-    b.innerHTML = `<span class="key">${touch ? '' : i + 1}</span>${it.max ? `<span class="lvl">${lvl}/${it.max}</span>` : ''}` +
+    b.innerHTML = `<span class="key">${touch ? '' : (i + 1) % 10}</span>${it.max ? `<span class="lvl">${lvl}/${it.max}</span>` : ''}` +
       `<div class="ic">${it.icon}</div><div class="nm">${it.name}</div><div class="ds">${blocked ? 'Not available' : needsAlive ? 'Buy after you respawn' : it.desc}</div>` +
       `<div class="cost">${maxed ? 'MAXED' : `🪙 ${cost}`}</div>`;
     b.addEventListener('click', () => buy(it.id));
@@ -1004,6 +1059,104 @@ function closeShop() {
 }
 $('shopClose').addEventListener('click', closeShop);
 window.addEventListener('keydown', (e) => { if (e.code === 'Escape') closeShop(); });
+
+// ------------------------------------------------------------------ kill streak rewards
+function onStreak(m) {
+  S.streak = m.n; S.rewards = m.rewards || {};
+  if (m.unlocked) {
+    const k = STREAKS.find((s) => s.id === m.unlocked);
+    banner(`🔥 ${k.n} kill streak! ${k.icon} ${k.name} ready: ${touch ? 'tap ⭐' : `press ${k.key}`}`);
+    SFX.sfxDrop();
+  }
+}
+
+function useStreak(id) {
+  const k = STREAKS.find((s) => s.id === id);
+  if (!k || !S.me || !S.me.alive || S.me.glide) return;
+  if (!(S.rewards[id] > 0)) { flashCenter(`${k.icon} ${k.name} locked`, `Get ${k.n} kills in a row to earn it`, 1.2); return; }
+  $('streakMenu').classList.add('hidden');
+  if (id === 'strike') { openStrikeMap(); return; }
+  const msg = { t: 'streakUse', k: id };
+  if (id === 'turret') {
+    const me = S.me, r2 = (v) => Math.round(v * 100) / 100;
+    msg.p = [me.x - Math.sin(me.yaw) * 2, me.y, me.z - Math.cos(me.yaw) * 2].map(r2);
+  }
+  send(msg);
+}
+
+function onStreakOn(m) {
+  const now = performance.now() / 1000;
+  if (m.k === 'radar') { S.radarUntil = now + m.time; flashCenter('📡 Radar online', `All enemies on your minimap for ${m.time} s`, 1.6); }
+  if (m.k === 'wallhack') { S.wallhackUntil = now + m.time; flashCenter('👁️ X-Ray Vision', `See enemies through walls for ${m.time} s`, 1.6); }
+  if (m.k === 'turret') flashCenter('🤖 Sentry turret deployed', 'It fires at enemies until destroyed', 1.6);
+  if (m.k === 'strike') flashCenter('✈️ Airstrike called in!', '', 1.4);
+  SFX.sfxPickup('shield');
+}
+
+function onStrike(m) {
+  const secs = m.delay + AIRSTRIKE.bombs * AIRSTRIKE.interval + 0.5;
+  R.strikeMarker(m.x, m.z, secs);
+  S.strikes.push({ x: m.x, z: m.z, until: performance.now() / 1000 + secs });
+  banner(m.owner === S.myId ? '✈️ Airstrike inbound!' : '⚠️ AIRSTRIKE INCOMING! Get out of the red zone!');
+  [0, 0.35, 0.7, 1.05].forEach((d) => setTimeout(() => SFX.sfxZoneTick(), d * 1000));
+}
+
+function toggleStreakMenu() {
+  const menu = $('streakMenu');
+  if (!menu.classList.contains('hidden')) { menu.classList.add('hidden'); return; }
+  menu.innerHTML = '';
+  for (const k of STREAKS) {
+    if (!(S.rewards[k.id] > 0)) continue;
+    const b = document.createElement('button');
+    b.textContent = `${k.icon} ${k.name}${S.rewards[k.id] > 1 ? ` ×${S.rewards[k.id]}` : ''}`;
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); useStreak(k.id); });
+    menu.appendChild(b);
+  }
+  if (menu.children.length) menu.classList.remove('hidden');
+}
+
+// Airstrike target picker: a big map with every player's position revealed.
+const strikeCanvas = $('strikeCanvas');
+function openStrikeMap() {
+  S.strikeOpen = true;
+  input.fire = false;
+  input.unlock();
+  $('clickToPlay').classList.add('hidden');
+  $('strikeMap').classList.remove('hidden');
+}
+function closeStrikeMap() {
+  if (!S.strikeOpen) return;
+  S.strikeOpen = false;
+  $('strikeMap').classList.add('hidden');
+  if (!touch && S.phase === 'playing' && S.me && S.me.alive && !input.locked) $('clickToPlay').classList.remove('hidden');
+}
+strikeCanvas.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  const r = strikeCanvas.getBoundingClientRect();
+  const x = ((e.clientX - r.left) / r.width) * MAP_HALF * 2 - MAP_HALF, z = ((e.clientY - r.top) / r.height) * MAP_HALF * 2 - MAP_HALF;
+  send({ t: 'streakUse', k: 'strike', p: [Math.round(x * 10) / 10, Math.round(z * 10) / 10] });
+  closeStrikeMap();
+});
+$('strikeCancel').addEventListener('click', closeStrikeMap);
+window.addEventListener('keydown', (e) => { if (e.code === 'Escape') closeStrikeMap(); });
+function drawStrikeMap() {
+  if (!S.strikeOpen || !mmBase) return;
+  const g = strikeCanvas.getContext('2d'), W = strikeCanvas.width, k = W / (MAP_HALF * 2);
+  const X = (v) => (v + MAP_HALF) * k;
+  g.drawImage(mmBase, 0, 0, W, W);
+  const z = S.zone;
+  if (z) { g.strokeStyle = '#ff3cac'; g.lineWidth = 3; g.beginPath(); g.arc(X(z.cx), X(z.cz), Math.max(0, z.r * k), 0, Math.PI * 2); g.stroke(); }
+  g.font = 'bold 13px sans-serif'; g.textAlign = 'center';
+  for (const p of S.snap.values()) {
+    if (!p.alive) continue;
+    const me = p.id === S.myId, info = S.info.get(p.id);
+    g.fillStyle = me ? '#ffffff' : '#ff2d55'; g.strokeStyle = '#000'; g.lineWidth = 2;
+    g.beginPath(); g.arc(X(p.x), X(p.z), me ? 7 : 6, 0, Math.PI * 2); g.fill(); g.stroke();
+    g.fillStyle = '#fff'; g.fillText(me ? 'YOU' : info ? info.name : '?', X(p.x), X(p.z) - 10);
+  }
+  g.strokeStyle = 'rgba(255,45,85,.6)'; g.setLineDash([5, 4]); g.lineWidth = 2; // show the bomb spread
+  g.beginPath(); g.arc(W - 30, 30, AIRSTRIKE.spread * k, 0, Math.PI * 2); g.stroke(); g.setLineDash([]);
+}
 
 // ------------------------------------------------------------------ minimap
 let mmBase = null;
@@ -1043,6 +1196,15 @@ function drawMinimap() {
       mmg.beginPath(); mmg.arc(X(z.tx), X(z.tz), Math.max(0, z.tr * k), 0, Math.PI * 2); mmg.stroke();
       mmg.setLineDash([]);
     }
+  }
+  const tNow = performance.now() / 1000;
+  S.strikes = S.strikes.filter((s) => s.until > tNow);
+  for (const s of S.strikes) {
+    mmg.fillStyle = 'rgba(255,45,85,.45)'; mmg.beginPath(); mmg.arc(X(s.x), X(s.z), AIRSTRIKE.spread * k, 0, Math.PI * 2); mmg.fill();
+  }
+  for (const t of R.turrets.values()) {
+    if (t.owner !== S.myId) continue;
+    mmg.fillStyle = '#4cc9f0'; mmg.fillRect(X(t.root.position.x) - 3, X(t.root.position.z) - 3, 6, 6);
   }
   if (performance.now() / 1000 < S.radarUntil) {
     for (const p of S.snap.values()) {
@@ -1123,6 +1285,18 @@ function updateHud(dt) {
     } else setText('ability', '');
     setText('nadeCount', S.maxNades ? `💣 ${S.nades} / ${S.maxNades}${touch ? '' : '  [G]'}` : '');
     $('tShop').classList.toggle('hidden', !shopAvailable());
+    setText('jetFuel', S.jetFuel > 0 ? `🚀 ${Math.ceil(S.jetFuel)} s fuel${me.jet ? ' · flying' : touch ? ' · double-tap JUMP' : ' · double-tap Space'}` : '');
+    // kill streak bar: current streak + rewards ready to use
+    const ready = STREAKS.filter((k) => S.rewards[k.id] > 0);
+    const sk = `${S.streak}|${ready.map((k) => k.id + S.rewards[k.id]).join()}`;
+    if (hudCache.streak !== sk) {
+      hudCache.streak = sk;
+      $('streakBar').innerHTML = (S.streak > 0 ? `<span class="streak-n">🔥 ${S.streak}</span>` : '') +
+        ready.map((k) => `<span class="reward">${touch ? '' : `<kbd>${k.key}</kbd> `}${k.icon} ${k.name}${S.rewards[k.id] > 1 ? ` ×${S.rewards[k.id]}` : ''}</span>`).join('');
+      $('tStreak').classList.toggle('hidden', !ready.length);
+    }
+    const xray = performance.now() / 1000 < S.wallhackUntil;
+    if (xray) setText('ability', `👁️ X-Ray ${Math.ceil(S.wallhackUntil - performance.now() / 1000)} s`);
     $('nadeCount').classList.toggle('empty', S.nades <= 0);
     const outside = z && me.alive && !me.glide && Math.hypot(me.x - z.cx, me.z - z.cz) > z.r;
     $('zoneVignette').classList.toggle('on', !!outside);
@@ -1145,6 +1319,7 @@ function updateHud(dt) {
   }
   centerT -= dt;
   drawMinimap();
+  drawStrikeMap();
 
   // scoreboard
   const sb = $('scoreboard');
@@ -1173,6 +1348,7 @@ function frame(t) {
     orbitCamera(dt);
   }
   if (S.world) updateNades(dt);
+  R.wallhack = S.phase === 'playing' && performance.now() / 1000 < S.wallhackUntil;
   const showVm = !!vm && !S.me.glide && !(S.cls === 'sniper' && S.aimK > 0.85);
   if (vm) R.updateViewmodel(dt, vm.moving, S.aimK, vm.reloadK, showVm, vm.nadeAim);
   if (S.phase !== 'lobby') updateHud(dt);

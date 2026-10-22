@@ -201,3 +201,25 @@ select:disabled, input:disabled { opacity: .7; }
 #tKnife { right: 260px; bottom: 240px; background: rgba(255, 60, 142, .5); font-size: 26px; }
 #shop { z-index: 30; }
 #deathScreen { z-index: 10; }
+
+/* ---------- v4: controls, streaks, airstrike map, jetpack ---------- */
+kbd { display: inline-block; min-width: 22px; padding: 1px 6px; margin: 0 1px; border-radius: 6px; background: #fff; color: #222; font: bold 12px/18px 'Trebuchet MS', sans-serif; text-align: center; box-shadow: 0 2px 0 #9a9ab0; }
+.controls-card { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 6px 14px; margin-top: 14px; padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,.07); font-size: 13px; }
+.controls-card div { display: flex; align-items: center; gap: 8px; }
+.controls-card span { min-width: 92px; text-align: right; }
+body.touch .controls-card, body.touch .keys-hint { display: none; }
+.keys-hint { max-width: 520px; line-height: 2; }
+#streakBar { position: absolute; left: 16px; bottom: 78px; display: flex; gap: 6px; align-items: center; font-weight: bold; }
+#streakBar .streak-n { background: rgba(255, 77, 109, .8); padding: 4px 10px; border-radius: 12px; }
+#streakBar .reward { background: rgba(255, 214, 10, .9); color: #222; padding: 4px 8px; border-radius: 12px; animation: pulse 1.2s infinite; }
+#streakBar .reward kbd { box-shadow: none; }
+@keyframes pulse { 50% { transform: scale(1.06) } }
+body.touch #streakBar { bottom: 74px; left: 50%; transform: translateX(-50%); }
+#tStreak { top: 312px; right: 20px; width: 48px; height: 48px; font-size: 20px; background: rgba(255, 214, 10, .7); }
+#streakMenu { position: absolute; top: 312px; right: 76px; display: flex; flex-direction: column; gap: 6px; pointer-events: auto; }
+#streakMenu button { font-family: inherit; font-weight: bold; font-size: 15px; padding: 10px 14px; border-radius: 12px; border: 2px solid #ffd60a; background: rgba(20,15,50,.85); color: #fff; }
+#strikeMap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(10,5,30,.55); z-index: 40; padding: 12px; }
+.strike-card { background: rgba(28,20,60,.95); border: 3px solid #ff4d6d; border-radius: 18px; padding: 12px 16px; text-align: center; max-height: 100%; overflow: auto; }
+.strike-card h2 { margin: 0 0 8px; }
+#strikeCanvas { width: min(560px, 80vw, 70vh); height: min(560px, 80vw, 70vh); border-radius: 12px; cursor: crosshair; touch-action: none; }
+#jetFuel { font-size: 13px; color: #4cc9f0; }

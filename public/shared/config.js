@@ -88,8 +88,9 @@ export function computeDamage(cls, dist, head, backstab) {
 // Zone timeline. Each phase: wait (s) with the next circle shown, then shrink (s) to radius r.
 // dps = damage per second while outside the safe zone during this phase.
 export const ZONE_PHASES = [
-  { wait: 75, shrink: 60, r: 170, dps: 1 },
-  { wait: 60, shrink: 50, r: 110, dps: 2 },
+  { wait: 80, shrink: 40, r: 235, dps: 1 },  // wide first circle: the map edges stay safe at the start
+  { wait: 50, shrink: 50, r: 170, dps: 1 },
+  { wait: 55, shrink: 50, r: 110, dps: 2 },
   { wait: 50, shrink: 45, r: 65, dps: 4 },
   { wait: 40, shrink: 35, r: 32, dps: 7 },
   { wait: 30, shrink: 30, r: 12, dps: 10 },
@@ -120,6 +121,7 @@ export const SHOP_ITEMS = [
   { id: 'mag', name: 'Extended Mag', icon: '📦', desc: '+50% magazine size', cost: 120, max: 1, notFor: 'melee' },
   { id: 'radar', name: 'Radar Ping', icon: '📡', desc: 'All enemies on your minimap for 12 s', cost: 120 },
   { id: 'nade', name: 'Grenade', icon: '💣', desc: '+1 grenade (up to your class max)', cost: 50 },
+  { id: 'jetpack', name: 'Jetpack', icon: '🚀', desc: '30 s of flight. Double-tap jump to fly, jump again to land', cost: 500 },
 ];
 export const DMG_UPGRADE = 0.2, SPEED_UPGRADE = 0.12, JUMP_UPGRADE = 0.3, MAG_UPGRADE = 0.5;
 export const RADAR_TIME = 12;
@@ -175,7 +177,28 @@ export const KNIFE = {
 // ---------- respawns ----------
 export const RESPAWN_DROP_HEIGHT = 70;
 // Shop items that only make sense while you're alive (upgrades can be bought while waiting to respawn).
-export const SHOP_NEEDS_ALIVE = ['med', 'shield', 'bigshield', 'nade', 'radar'];
+export const SHOP_NEEDS_ALIVE = ['med', 'shield', 'bigshield', 'nade', 'radar', 'jetpack'];
+
+// ---------- jetpack (shop) ----------
+export const JETPACK = {
+  fuel: 30,          // seconds of flight per tank
+  lift: 7,           // climb speed right after take-off (m/s)
+  liftTime: 1.4,     // seconds of climbing before it settles into a hover
+  descend: 6,        // crouch to sink
+  speedMult: 1.25,   // horizontal speed while flying
+  ceiling: 90,       // max altitude
+  doubleTap: 0.35,   // seconds between jump presses
+};
+
+// ---------- kill streak rewards (kills in a row without dying) ----------
+export const STREAKS = [
+  { id: 'radar', n: 3, key: 1, name: 'Radar', icon: '📡', desc: 'All enemies on your minimap for 30 s', time: 30 },
+  { id: 'turret', n: 6, key: 2, name: 'Sentry Turret', icon: '🤖', desc: 'Drops an auto-firing turret in front of you' },
+  { id: 'wallhack', n: 8, key: 3, name: 'X-Ray Vision', icon: '👁️', desc: 'See enemies through walls for 60 s', time: 60 },
+  { id: 'strike', n: 10, key: 4, name: 'Airstrike', icon: '✈️', desc: 'Pick a spot on the map for a massive bombing run' },
+];
+export const TURRET = { hp: 150, range: 45, rate: 0.3, damage: 11, accuracy: 0.6 };
+export const AIRSTRIKE = { delay: 2.5, bombs: 14, spread: 16, interval: 0.18, radius: 8, maxDamage: 110, minDamage: 20 };
 
 // ---------- host settings (lobby) ----------
 // Each setting is a dropdown; the host picks an option and the server validates it against this list.
@@ -191,6 +214,7 @@ export const SETTINGS = [
   { key: 'dmg', group: 'Combat', label: 'Weapon damage', def: 1, options: [[0.75, '×0.75'], [1, 'Normal'], [1.25, '×1.25'], [1.5, '×1.5']] },
   { key: 'startShield', group: 'Combat', label: 'Bonus starting shield', def: 0, options: [[0, 'None'], [50, '+50'], [100, '+100']] },
   { key: 'grenades', group: 'Combat', label: 'Grenades', def: 'normal', options: [['off', 'Off'], ['normal', 'Normal'], ['double', 'Double']] },
+  { key: 'streaks', group: 'Combat', label: 'Kill streak rewards', def: 'on', options: ONOFF },
   { key: 'sniper', group: 'Classes', label: 'Sniper allowed', def: 'on', options: ONOFF },
   { key: 'rifle', group: 'Classes', label: 'Rifle allowed', def: 'on', options: ONOFF },
   { key: 'melee', group: 'Classes', label: 'Melee allowed', def: 'on', options: ONOFF },

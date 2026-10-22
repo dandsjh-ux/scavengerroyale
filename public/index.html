@@ -51,6 +51,20 @@
         <h3>🏆 Session standings</h3>
         <table id="sessionTable"></table>
       </div>
+      <div id="controlsCard" class="controls-card">
+        <div><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>Move</div>
+        <div><span><kbd>🖱</kbd></span>Look · click to shoot</div>
+        <div><span><kbd>Right-click</kbd></span>Aim / scope</div>
+        <div><span><kbd>Space</kbd></span>Jump (double-tap = 🚀)</div>
+        <div><span><kbd>Shift</kbd></span>Sprint</div>
+        <div><span><kbd>C</kbd></span>Crouch</div>
+        <div><span><kbd>R</kbd></span>Reload</div>
+        <div><span><kbd>G</kbd></span>Hold to aim grenade</div>
+        <div><span><kbd>E</kbd> <kbd>F</kbd></span>Knife dash / throw</div>
+        <div><span><kbd>B</kbd></span>Shop</div>
+        <div><span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></span>Kill streak rewards</div>
+        <div><span><kbd>Tab</kbd></span>Scoreboard</div>
+      </div>
       <details class="help">
         <summary>How to play</summary>
         <div class="help-grid">
@@ -84,11 +98,13 @@
       <div class="bar shield"><div id="shieldFill"></div><span id="shieldText">0</span></div>
       <div class="bar hp"><div id="hpFill"></div><span id="hpText">100</span></div>
     </div>
+    <div id="streakBar"></div>
     <div id="weaponBox">
       <div id="weaponName">Rifle</div>
       <div id="ammo">30 / ∞</div>
       <div id="ability"></div>
       <div id="nadeCount">💣 0</div>
+      <div id="jetFuel"></div>
     </div>
     <div id="zoneVignette"></div>
     <div id="hurtFlash"></div>
@@ -102,7 +118,7 @@
         <div class="pill pts" id="shopPts">🪙 0</div>
         <button id="shopClose" class="shop-close">✕</button>
       </div>
-      <p class="small">Earn 🪙 from kills (+100) and by scavenging coins (+20) and gems (+50) hidden in buildings. Keys 1–9 buy, B closes.</p>
+      <p class="small">Earn 🪙 from kills (+100) and by scavenging coins (+20) and gems (+50) hidden in buildings. Keys 1–0 buy, B closes.</p>
       <div id="shopItems"></div>
       <div id="shopMsg"></div>
     </div>
@@ -131,7 +147,17 @@
     </div>
   </div>
 
-  <div id="clickToPlay" class="hidden overlay-msg clickable"><h2>Click to play</h2><p class="small">Esc frees the mouse</p></div>
+  <div id="clickToPlay" class="hidden overlay-msg clickable"><h2>Click to play</h2>
+    <p class="small keys-hint"><kbd>WASD</kbd> move · <kbd>Space</kbd> jump · <kbd>Shift</kbd> sprint · <kbd>R</kbd> reload · <kbd>G</kbd> grenade · <kbd>B</kbd> shop · <kbd>1–4</kbd> streaks</p>
+    <p class="small">Esc frees the mouse</p></div>
+  <div id="strikeMap" class="hidden">
+    <div class="strike-card">
+      <h2>✈️ Airstrike: pick a target</h2>
+      <canvas id="strikeCanvas" width="560" height="560"></canvas>
+      <p class="small">Enemies are shown as red dots. Click / tap where the bombs should fall.</p>
+      <button id="strikeCancel" class="mini-btn">Cancel</button>
+    </div>
+  </div>
   <div id="connMsg" class="overlay-msg">Connecting…</div>
 
   <!-- ===================== TOUCH ===================== -->
@@ -147,6 +173,8 @@
     <button class="tbtn small" id="tScore">☰</button>
     <button class="tbtn small" id="tShop">🛒</button>
     <button class="tbtn" id="tNade">💣</button>
+    <button class="tbtn small hidden" id="tStreak">⭐</button>
+    <div id="streakMenu" class="hidden"></div>
     <button class="tbtn" id="tKnife">🗡️</button>
   </div>
 

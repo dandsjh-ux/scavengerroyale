@@ -2,14 +2,20 @@
 
 A bright, colourful first-person **battle royale** for up to **8 players on your local network** (LAN / home Wi-Fi), built with three.js. It runs on keyboard and mouse or on a tablet's touch screen.
 
-- **Big procedural city**: a 360 m island with roads, parks, warehouses and towers, plus about 90 buildings with **interiors you can enter**. Buildings have stairs, several floors, rooms, windows and roofs to camp on. Every match gets a new layout.
+- **Big procedural city**: a 360 m island with roads, parks, warehouses and towers, plus about 130 buildings with **interiors you can enter**, including small one-room hideouts packed around the central plaza and parks. Buildings have stairs, several floors, rooms, windows and roofs to camp on. Every match gets a new layout.
 - **Skydive start**: everyone parachutes in and picks their own landing spot. You can't be hurt while skydiving.
 - **Respawns**: when you're knocked out you skydive back into the zone after a short countdown. You can switch class and shop for upgrades while you wait. Respawns stop in the **final two circles** (adjustable), and from then on eliminations are final.
-- **Slowly shrinking zone**: six phases, about 10 minutes in total. The next circle is shown on the minimap, and standing outside it hurts more each phase.
+- **Slowly shrinking zone**: seven phases, about 9 minutes in total. The first circle is wide (235 m), so the map edges stay safe at the start. The next circle is shown on the minimap, and standing outside it hurts more each phase.
 - **Loot**: medkits ❤, shields 🛡 and grenades 💣 are scattered through the buildings, along with coins 🪙 and gems 💎 to collect.
 - **Grenades 💣**: hold **G** (or the 💣 button on a tablet) to see the throw arc and blast radius, then release to throw. They bounce off walls, explode after 2.4 s and knock players back. Walls block the blast. The server simulates every grenade, so all players see the same bounces.
 - **Supply drops 📦**: about every 75 s a crate parachutes into the next safe zone, marked by a tall light beam and on the minimap. It gives full shield, +50 health, 2 grenades and 150 points, so expect a fight over it.
 - **Loot bags 💰**: eliminated players drop a bag worth some of their points, plus a grenade if they had one.
+- **Kill streak rewards 🔥**: these are earned by getting kills in a row without dying. Use them with the number keys **1–4**, or the ⭐ menu on a tablet:
+  - **3** kills: 📡 Radar, which shows every enemy on your minimap for 30 s
+  - **6** kills: 🤖 Sentry Turret, which you place on the ground. It auto-fires at enemies until someone shoots it down.
+  - **8** kills: 👁️ X-Ray Vision, which shows enemies through walls for 60 s
+  - **10** kills: ✈️ Airstrike, which opens a map with every player's position revealed. Click a spot and, after a warning, 14 bombs carpet the area. Being indoors gives you some cover.
+- **Jetpack 🚀** (500 🪙 in the shop): double-tap jump to take off and keep shooting while you hover. Hold crouch to sink, and press jump to switch it off. A tank holds 30 s of flight.
 - **Bounty 👑**: the outright kill leader (2 or more kills) wears a crown and shows on everyone's minimap. Taking them out pays +150 points, which helps players who are behind catch up.
 - **Match mutators**: the host picks one, or leaves it on 🎲 Random for a surprise each round:
   - 🌙 **Moon Jump**: low gravity
@@ -21,7 +27,7 @@ A bright, colourful first-person **battle royale** for up to **8 players on your
   - 🎯 **Headhunters**: bigger headshots
 - **Time of day**: each map has its own look (Sunny Noon, Golden Hour, Candy Sunset or Fresh Morning), with a gradient sky, sun, animated water and drifting clouds.
 - **End-of-match awards** (Damage Dealer, Longest Shot, Scavenger King, Demolition) and a **session leaderboard** of wins and kills in the lobby.
-- **Points & shop 🛒**: you earn points from **kills (+100)** and from **scavenging** (coins +20, gems +50, any other loot +10). Spend them in the shop at any time (**B** key, or the 🛒 button on a tablet), even while waiting to respawn (upgrades only). The shop **closes in the final two circles**. It sells medkits, shield cells, Mega Shield, grenades, Power Core (+20% damage), Turbo Shoes (+12% speed), Spring Boots (+30% jump), Extended Mag (+50% magazine) and Radar Ping (shows every enemy on your minimap for 12 s). Points and upgrades reset each match. The server checks every purchase.
+- **Points & shop 🛒**: you earn points from **kills (+100)** and from **scavenging** (coins +20, gems +50, any other loot +10). Spend them in the shop at any time (**B** key, or the 🛒 button on a tablet), even while waiting to respawn (upgrades only). The shop **closes in the final two circles**. It sells medkits, shield cells, Mega Shield, grenades, a jetpack, Power Core (+20% damage), Turbo Shoes (+12% speed), Spring Boots (+30% jump), Extended Mag (+50% magazine) and Radar Ping (shows every enemy on your minimap for 12 s). Points and upgrades reset each match. The server checks every purchase.
 - **Three classes**
 
 | Class | Speed | Weapon | Passive | Grenades (start / max) |
@@ -78,7 +84,7 @@ The host (👑, the first person in the lobby) sets up each match from the lobby
 | Players | Number of bots, bot difficulty, mutator |
 | Respawns | On/off, respawn delay (3–15 s), respawns per player (unlimited or 1–5), how many final circles have no respawns or shop (1–3) |
 | Shop | On/off, prices (half to ×2), points earned (×0.5 to ×3) |
-| Combat | Weapon damage, bonus starting shield, grenades (off / normal / double) |
+| Combat | Weapon damage, bonus starting shield, grenades (off / normal / double), kill streak rewards on/off |
 | Classes | Allow or ban Sniper, Rifle or Melee |
 | Zone | Zone speed, zone damage |
 | World | Loot amount, supply drop frequency (or off), bounty on/off |
@@ -109,7 +115,9 @@ Each moment picks one of its takes at random. A **🔊 Voice** volume slider is 
 | Sprint | Shift | Push the stick fully |
 | Reload | R | **RELOAD** |
 | Grenade | Hold **G** to aim, release to throw | Hold **💣** (drag to aim), release to throw |
-| Shop | B (1–9 to buy) | 🛒 |
+| Kill streak rewards | 1 / 2 / 3 / 4 | ⭐ menu |
+| Jetpack | Double-tap Space (Space again to land, C to sink) | Double-tap **JUMP** |
+| Shop | B (1–0 to buy) | 🛒 |
 | Scoreboard | Tab | ☰ |
 
 When you're eliminated you spectate the other players. Click or tap to switch who you're watching.

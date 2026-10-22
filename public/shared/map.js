@@ -222,11 +222,46 @@ export function generateMap(seed) {
     box(x - 0.3, 0, z - 0.3, x + 0.3, h, z + 0.3, 0x8b5e34);
   }
 
+  // Small one-room hideout: door on one side, windows on the others, flat roof, loot inside.
+  function shed(x0, z0, w, d) {
+    const x1 = x0 + w, z1 = z0 + d, T = WALL_T, H = 3.0;
+    const col = pick(WALL_COLORS), roof = pick(TRIM_COLORS);
+    buildings.push({ x0, z0, x1, z1, floors: 1, c: col });
+    const side = RI(0, 3);
+    const door = (a, b) => ({ c: (a + b) / 2 + R(-0.2, 0.2) * (b - a - 3), w: 1.5, b: 0, t: 2.4 });
+    wall('x', z0, z0 + T, x0, x1, 0, H, windowsFor(x0 + 0.8, x1 - 0.8, side === 0 ? door(x0, x1) : null), col);
+    wall('x', z1 - T, z1, x0, x1, 0, H, windowsFor(x0 + 0.8, x1 - 0.8, side === 1 ? door(x0, x1) : null), col);
+    wall('z', x0, x0 + T, z0 + T, z1 - T, 0, H, windowsFor(z0 + 0.8, z1 - 0.8, side === 2 ? door(z0, z1) : null), col);
+    wall('z', x1 - T, x1, z0 + T, z1 - T, 0, H, windowsFor(z0 + 0.8, z1 - 0.8, side === 3 ? door(z0, z1) : null), col);
+    box(x0 + T, 0, z0 + T, x1 - T, 0.05, z1 - T, FLOOR_COLOR);
+    box(x0 - 0.25, H, z0 - 0.25, x1 + 0.25, H + 0.3, z1 + 0.25, roof);
+    if (rnd() < 0.6) { const c = pick(CRATE_COLORS), cx = x0 + T + 0.9, cz = z0 + T + 0.9; box(cx - 0.6, 0, cz - 0.6, cx + 0.6, 1.1, cz + 0.6, c); }
+    if (rnd() < 0.7) pickupSpots.push([x0 + w * 0.62, 0.05, z0 + d * 0.62]);
+  }
+
+  // Scatter sheds over a rectangle, skipping anything in `keepOut` ([x0,z0,x1,z1] rects, grown by a margin).
+  function fillSheds(x0, z0, x1, z1, keepOut, chance = 0.75) {
+    const taken = keepOut.map((r) => [...r]);
+    const free = (a, b, c, e) => !taken.some((r) => a < r[2] + 2 && c > r[0] - 2 && b < r[3] + 2 && e > r[1] - 2);
+    for (let gx = x0 + 1; gx < x1 - 5; gx += 8.5) {
+      for (let gz = z0 + 1; gz < z1 - 5; gz += 8.5) {
+        if (rnd() > chance) continue;
+        const w = R(5, 7), d = R(5, 7);
+        const sx = Math.min(x1 - w - 1, gx + R(0, 1.5)), sz = Math.min(z1 - d - 1, gz + R(0, 1.5));
+        if (!free(sx, sz, sx + w, sz + d)) continue;
+        shed(sx, sz, w, d);
+        taken.push([sx, sz, sx + w, sz + d]);
+      }
+    }
+    return taken;
+  }
+
   function lot(x0, z0, x1, z1) {
     const m = 2.5;
     const aw = x1 - x0 - 2 * m, ad = z1 - z0 - 2 * m;
     if (aw < 12 || ad < 10) {
-      for (let k = 0; k < 3; k++) tree(R(x0 + 2, x1 - 2), R(z0 + 2, z1 - 2));
+      if (aw >= 6 && ad >= 6) shed(x0 + m, z0 + m, Math.min(8, aw), Math.min(8, ad));
+      else for (let k = 0; k < 3; k++) tree(R(x0 + 2, x1 - 2), R(z0 + 2, z1 - 2));
       return;
     }
     const w = R(Math.max(12, aw * 0.65), aw), d = R(Math.max(10, ad * 0.65), ad);
@@ -256,7 +291,14 @@ export function generateMap(seed) {
       hut.x = R(x0 + 3, x1 - 3 - hut.w); hut.z = R(z0 + 3, z1 - 3 - hut.d);
       building(hut.x, hut.z, hut.w, hut.d, 1, { crates: 1 });
     }
-    const clear = (x, z, m) => !hut || x < hut.x - m || x > hut.x + hut.w + m || z < hut.z - m || z > hut.z + hut.d + m;
+    const solid = hut ? [hut] : [];
+    const clear = (x, z, m) => solid.every((h) => x < h.x - m || x > h.x + h.w + m || z < h.z - m || z > h.z + h.d + m);
+    for (let k = 0; k < 2; k++) {
+      const w = R(5.5, 7.5), d = R(5.5, 7.5), sx = R(x0 + 3, x1 - 3 - w), sz = R(z0 + 3, z1 - 3 - d);
+      if (!clear(sx, sz, w + 3) || !clear(sx + w, sz + d, w + 3)) continue;
+      shed(sx, sz, w, d);
+      solid.push({ x: sx, z: sz, w, d }); // trees, hedges and rocks keep clear of it
+    }
     const n = RI(14, 24);
     for (let k = 0; k < n; k++) {
       const tx = R(x0 + 2, x1 - 2), tz = R(z0 + 2, z1 - 2);
@@ -297,12 +339,15 @@ export function generateMap(seed) {
     const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
     const s = 15;
     building(cx - s / 2, cz - s / 2, s, s, RI(5, 7), { crates: 1 });
+    const keep = [[cx - s / 2 - 2, cz - s / 2 - 2, cx + s / 2 + 2, cz + s / 2 + 2]];
     // small surrounding buildings in the corners
     const corners = [[x0 + 3, z0 + 3], [x1 - 17, z0 + 3], [x0 + 3, z1 - 15], [x1 - 17, z1 - 15]];
     for (const [ax, az] of corners) {
-      if (rnd() < 0.55) building(ax, az, 14, 12, RI(1, 2));
-      else { tree(ax + 5, az + 5); tree(ax + 9, az + 8); }
+      if (rnd() < 0.55) { building(ax, az, 14, 12, RI(1, 2)); keep.push([ax, az, ax + 14, az + 12]); }
     }
+    // keep walkways to the tower open, then fill the rest of the plaza with hideouts
+    keep.push([cx - 1.5, z0, cx + 1.5, z1], [x0, cz - 1.5, x1, cz + 1.5]);
+    fillSheds(x0 + 1, z0 + 1, x1 - 1, z1 - 1, keep, 0.9);
   }
 
   // ---------- lay out blocks ----------

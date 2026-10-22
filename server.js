@@ -15,6 +15,7 @@ import {
   MEDKIT_HEAL, SHIELD_GAIN, DROP_HEIGHT, EYE_HEIGHT, BODY_HEIGHT, computeDamage, MAP_HALF,
   POINTS, SHOP_ITEMS, DMG_UPGRADE, GRENADE, MUTATORS, mut, BOT_SKILL, DROP_FALL_SPEED,
   KNIFE, RESPAWN_DROP_HEIGHT, SHOP_NEEDS_ALIVE, SETTINGS, defaultSettings, allowedClasses,
+  STREAKS, TURRET, AIRSTRIKE, JETPACK,
 } from './public/shared/config.js';
 import { generateMap } from './public/shared/map.js';
 import { World, stepBody, stepGrenade, lineOfSight } from './public/shared/physics.js';
@@ -129,6 +130,9 @@ const game = {
   nextPickupId: 0,
   nextDropAt: 0,
   bountyId: null,
+  turrets: [],
+  strikes: [],
+  nextTurretId: 1,
 };
 const session = new Map();   // name -> { name, wins, kills, games } for this server run
 const M = () => mut(game.mut);
@@ -177,11 +181,14 @@ function makePlayer(fields) {
     hp: MAX_HP, shield: 0, alive: false, inMatch: false, kills: 0, place: 0,
     lastShot: 0, joinedAt: Date.now(), points: 0, up: newUpgrades(), nades: 0, lastNade: 0, scope: 0,
     lastSlam: 0, lastKnifeThrow: 0, respawnAt: null, livesUsed: 0,
+    streak: 0, rewards: newRewards(), jetFuel: 0, jet: 0,
     stats: newStats(), ...fields,
   };
 }
 
 function newUpgrades() { return { dmg: 0, speed: 0, jump: 0, mag: 0 }; }
+function newRewards() { return Object.fromEntries(STREAKS.map((k) => [k.id, 0])); }
+function sendStreak(p, unlocked = null) { send(p, { t: 'streak', n: p.streak, rewards: p.rewards, unlocked }); }
 function newStats() { return { dmg: 0, longest: 0, earned: 0, nadeKills: 0 }; }
 const dmgMult = (p) => (1 + DMG_UPGRADE * p.up.dmg) * (M().dmgMult || 1) * SET().dmg;
 function nadeCaps(p) {
@@ -218,6 +225,7 @@ function onBuy(p, id) {
   if (id === 'med' && p.hp >= MAX_HP) return fail('Health is already full');
   if ((id === 'shield' || id === 'bigshield') && p.shield >= MAX_SHIELD) return fail('Shield is already full');
   if (id === 'nade' && p.nades >= maxNades(p)) return fail(`You can only carry ${maxNades(p)} grenades`);
+  if (id === 'jetpack' && p.jetFuel >= JETPACK.fuel - 1) return fail('Your jetpack tank is already full');
   const cost = itemCost(item);
   if (p.points < cost) return fail(`Need ${cost - p.points} more points`);
   p.points -= cost;
@@ -225,6 +233,7 @@ function onBuy(p, id) {
   else if (id === 'shield') p.shield = Math.min(MAX_SHIELD, p.shield + SHIELD_GAIN);
   else if (id === 'bigshield') p.shield = MAX_SHIELD;
   else if (id === 'nade') { p.nades++; sendInv(p); }
+  else if (id === 'jetpack') p.jetFuel = JETPACK.fuel;
   else if (item.max) p.up[id] = (p.up[id] || 0) + 1;
   send(p, { t: 'pts', pts: p.points, up: p.up, gain: 0, bought: id });
 }
@@ -314,6 +323,7 @@ function reconnect(p, ws, addr) {
       pos: [r2(p.x), r2(p.y), r2(p.z)], yaw: p.yaw, glide: p.glide, alive: p.alive, hp: Math.ceil(p.hp), shield: Math.ceil(p.shield),
       kills: p.kills, pts: p.points, up: p.up, nades: p.nades, maxNades: maxNades(p), lk: game.locked ? 1 : 0,
       respawnIn: p.respawnAt != null ? Math.max(0, r2(p.respawnAt - game.time)) : 0, lives: livesLeft, place: p.place,
+      streak: p.streak, rewards: p.rewards, jetFuel: p.jetFuel,
     });
     broadcast({ t: 'dc', id: p.id, on: 0 }, p);
   } else if (game.phase === 'playing') {
@@ -369,10 +379,13 @@ function handle(p, m) {
       if (!p.inMatch || !p.alive || !Array.isArray(m.p)) break;
       p.x = +m.p[0] || 0; p.y = +m.p[1] || 0; p.z = +m.p[2] || 0;
       p.yaw = +m.yw || 0; p.pitch = +m.pt || 0; p.crouch = m.cr ? 1 : 0; p.glide = m.gl ? 1 : 0; p.scope = m.sc ? 1 : 0;
+      p.jet = m.jp && p.jetFuel > 0 ? 1 : 0;
+      if (m.jf != null) p.jetFuel = Math.max(0, Math.min(p.jetFuel, +m.jf || 0)); // fuel only ever goes down
       break;
     case 'shot': onShot(p, m); break;
     case 'melee': onMelee(p, m); break;
     case 'nade': onNade(p, m); break;
+    case 'streakUse': onStreakUse(p, m); break;
     case 'buy': onBuy(p, String(m.item)); break;
     case 'chat': if (typeof m.s === 'string') broadcast({ t: 'chat', id: p.id, s: m.s.slice(0, 120) }); break;
   }
@@ -386,6 +399,7 @@ function onShot(p, m) {
   if (now - p.lastShot < w.rate * 0.5) return;
   p.lastShot = now;
   if (Array.isArray(m.o) && Array.isArray(m.e)) broadcast({ t: 'fx', k: 'shot', id: p.id, c: p.cls, o: m.o, e: m.e }, p);
+  if (m.hitT != null) { damageTurret(m.hitT, computeDamage(p.cls, 20, false, false) * dmgMult(p), p); return; }
   if (m.hit == null) return;
   const v = players.get(m.hit);
   if (!v || v === p || !v.inMatch || !v.alive) return;
@@ -410,6 +424,7 @@ function onMelee(p, m) {
   if (kind === 'throw' && Array.isArray(m.o) && Array.isArray(m.e)) { fx.o = m.o; fx.e = m.e; }
   broadcast(fx, p);
   if (kind === 'slam') { knifeSlam(p, dmgMult(p)); return; }
+  if (m.hitT != null) { damageTurret(m.hitT, (kind === 'throw' ? KNIFE.throw.damage : CLASSES.melee.weapon.damage) * dmgMult(p), p); return; }
   if (m.hit == null) return;
   const v = players.get(m.hit);
   if (!v || v === p || !v.inMatch || !v.alive) return;
@@ -440,6 +455,7 @@ function knifeSlam(p, mult) {
     applyDamage(v, Math.round(dmg), p, 'melee', false, false, [p.x, p.z], { kind: 'slam' });
     lifesteal(p);
   }
+  for (const t of [...game.turrets]) if (t.owner !== p.id && Math.hypot(t.x - p.x, t.z - p.z) < R) damageTurret(t.id, KNIFE.slam.damage * mult, p);
 }
 
 function lifesteal(p) {
@@ -477,20 +493,106 @@ function updateNades(dt) {
 }
 
 function explode(g) {
-  broadcast({ t: 'boom', id: g.id, p: [r2(g.x), r2(g.y), r2(g.z)] });
-  const owner = players.get(g.owner) || null;
-  const R = GRENADE.radius;
+  blast(g.x, g.y, g.z, players.get(g.owner) || null, { id: g.id, radius: GRENADE.radius, max: GRENADE.maxDamage, min: GRENADE.minDamage, self: GRENADE.selfMult, weapon: 'nade' });
+}
+
+// An explosion (grenade or airstrike bomb): damages players and turrets in range that aren't behind walls.
+function blast(x, y, z, owner, o) {
+  broadcast({ t: 'boom', id: o.id, p: [r2(x), r2(y), r2(z)], big: o.weapon === 'strike' ? 1 : 0 });
+  const R = o.radius;
   for (const v of aliveList()) {
     const cy = v.y + 1.0;
-    const d = Math.hypot(v.x - g.x, cy - g.y, v.z - g.z);
+    const d = Math.hypot(v.x - x, cy - y, v.z - z);
     if (d > R) continue;
     // walls block the blast (check chest and head so ducking behind a car helps but isn't perfect)
-    if (!lineOfSight(game.world, g.x, g.y + 0.25, g.z, v.x, cy, v.z) && !lineOfSight(game.world, g.x, g.y + 0.25, g.z, v.x, v.y + 1.6, v.z)) continue;
-    let dmg = GRENADE.maxDamage + (GRENADE.minDamage - GRENADE.maxDamage) * (d / R);
-    if (owner === v) dmg *= GRENADE.selfMult;
+    if (!lineOfSight(game.world, x, y + 0.25, z, v.x, cy, v.z) && !lineOfSight(game.world, x, y + 0.25, z, v.x, v.y + 1.6, v.z)) continue;
+    let dmg = o.max + (o.min - o.max) * (d / R);
+    if (owner === v) { if (!o.self) continue; dmg *= o.self; }
     else if (owner) dmg *= dmgMult(owner) * (owner.isBot ? BOT_SKILL[game.botSkill].dmg : 1);
-    const killed = applyDamage(v, Math.round(dmg), owner && owner !== v ? owner : null, 'nade', false, false, [g.x, g.z]);
-    if (killed && owner && owner !== v) owner.stats.nadeKills++;
+    const killed = applyDamage(v, Math.round(dmg), owner && owner !== v ? owner : null, o.weapon, false, false, [x, z]);
+    if (killed && owner && owner !== v && o.weapon === 'nade') owner.stats.nadeKills++;
+  }
+  for (const t of [...game.turrets]) {
+    const d = Math.hypot(t.x - x, t.y + 0.7 - y, t.z - z);
+    if (d < R && (!owner || t.owner !== owner.id)) damageTurret(t.id, o.max + (o.min - o.max) * (d / R), owner);
+  }
+}
+
+// ------------------------------------------------------------------ kill streak rewards
+function onStreakUse(p, m) {
+  const k = STREAKS.find((s) => s.id === m.k);
+  if (!k || !p.inMatch || !p.alive || p.glide || game.phase !== 'playing' || !(p.rewards[k.id] > 0)) return;
+  if (k.id === 'turret') {
+    let tx = +m.p?.[0], tz = +m.p?.[2];
+    if (!Number.isFinite(tx) || !Number.isFinite(tz) || Math.hypot(tx - p.x, tz - p.z) > 4) { tx = p.x; tz = p.z; }
+    const top = p.y + 1.5;
+    const ty = Math.max(0, top - game.world.raycast(tx, top, tz, 0, -1, 0, 200));
+    game.turrets.push({ id: game.nextTurretId++, owner: p.id, x: tx, y: ty, z: tz, yaw: p.yaw, hp: TURRET.hp, cool: 1, think: 0, target: null });
+  } else if (k.id === 'strike') {
+    const sx = +m.p?.[0], sz = +m.p?.[1];
+    if (!Number.isFinite(sx) || !Number.isFinite(sz) || Math.abs(sx) > MAP_HALF || Math.abs(sz) > MAP_HALF) return;
+    game.strikes.push({ owner: p.id, x: sx, z: sz, t: AIRSTRIKE.delay, bombs: AIRSTRIKE.bombs, next: 0 });
+    broadcast({ t: 'strike', x: r2(sx), z: r2(sz), owner: p.id, delay: AIRSTRIKE.delay });
+  }
+  p.rewards[k.id]--;
+  send(p, { t: 'streakOn', k: k.id, time: k.time || 0 });
+  sendStreak(p);
+}
+
+function damageTurret(id, amount, attacker) {
+  const t = game.turrets.find((x) => x.id === id);
+  if (!t || (attacker && attacker.id === t.owner)) return;
+  t.hp -= amount;
+  if (attacker) send(attacker, { t: 'hitm', turret: 1, amt: Math.round(amount), kill: t.hp <= 0 });
+  if (t.hp <= 0) {
+    game.turrets.splice(game.turrets.indexOf(t), 1);
+    broadcast({ t: 'boom', p: [r2(t.x), r2(t.y + 0.7), r2(t.z)] });
+  }
+}
+
+function updateTurrets(dt) {
+  for (const t of game.turrets) {
+    const owner = players.get(t.owner) || null;
+    t.think -= dt; t.cool -= dt;
+    if (t.think <= 0) { // pick the nearest visible enemy
+      t.think = 0.3;
+      let best = null, bd = TURRET.range;
+      for (const v of aliveList()) {
+        if (v.id === t.owner || v.glide) continue;
+        const d = Math.hypot(v.x - t.x, v.y - t.y, v.z - t.z);
+        if (d > bd || !lineOfSight(game.world, t.x, t.y + 1.2, t.z, v.x, v.y + 1.2, v.z)) continue;
+        best = v; bd = d;
+      }
+      t.target = best ? best.id : null;
+    }
+    const v = t.target != null ? players.get(t.target) : null;
+    if (!v || !v.alive) continue;
+    t.yaw = Math.atan2(-(v.x - t.x), -(v.z - t.z));
+    if (t.cool > 0) continue;
+    t.cool = TURRET.rate;
+    const d = Math.hypot(v.x - t.x, v.y - t.y, v.z - t.z);
+    const hit = Math.random() < Math.max(0.15, TURRET.accuracy - d / 150) * (v.crouch ? 0.8 : 1);
+    const o = [r2(t.x), r2(t.y + 1.25), r2(t.z)];
+    const e = hit ? [r2(v.x), r2(v.y + 1.1), r2(v.z)] : [r2(v.x + (Math.random() - 0.5) * 3), r2(v.y + Math.random() * 2.2), r2(v.z + (Math.random() - 0.5) * 3)];
+    broadcast({ t: 'fx', k: 'shot', id: -t.id, c: 'turret', o, e });
+    if (hit) applyDamage(v, Math.round(TURRET.damage * SET().dmg * (M().dmgMult || 1)), owner, 'turret', false, false, [t.x, t.z]);
+  }
+}
+
+function updateStrikes(dt) {
+  for (let i = game.strikes.length - 1; i >= 0; i--) {
+    const s = game.strikes[i];
+    s.t -= dt;
+    if (s.t > 0) continue;
+    s.next -= dt;
+    while (s.next <= 0 && s.bombs > 0) {
+      s.next += AIRSTRIKE.interval; s.bombs--;
+      const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * AIRSTRIKE.spread;
+      const bx = s.x + Math.cos(a) * d, bz = s.z + Math.sin(a) * d;
+      const by = Math.max(0, 120 - game.world.raycast(bx, 120, bz, 0, -1, 0, 120)) + 0.3;
+      blast(bx, by, bz, players.get(s.owner) || null, { radius: AIRSTRIKE.radius, max: AIRSTRIKE.maxDamage, min: AIRSTRIKE.minDamage, self: 0, weapon: 'strike' });
+    }
+    if (s.bombs <= 0) game.strikes.splice(i, 1);
   }
 }
 
@@ -531,8 +633,16 @@ function killPlayer(v, killer, weapon, head = false) {
   if (respawn) { v.respawnAt = game.time + SET().respawnDelay; v.livesUsed++; v.place = 0; }
   else { v.respawnAt = null; v.place = remaining().length + 1; }
   const wasBounty = game.bountyId === v.id;
+  v.streak = 0; v.jetFuel = 0; v.jet = 0;
+  if (!v.isBot) sendStreak(v);
   if (killer && killer !== v) {
     killer.kills++;
+    if (!killer.isBot && SET().streaks !== 'off') {
+      killer.streak++;
+      const k = STREAKS.find((s) => s.n === killer.streak);
+      if (k) killer.rewards[k.id]++;
+      sendStreak(killer, k ? k.id : null);
+    }
     givePoints(killer, POINTS.kill, 'kill');
     if (wasBounty) givePoints(killer, POINTS.bounty, 'bounty');
     if (!killer.isBot) sessionEntry(killer).kills++;
@@ -629,6 +739,7 @@ function startMatch() {
     p.inMatch = true; p.alive = true; p.hp = MAX_HP; p.shield = startShield(p); p.kills = 0; p.place = 0; p.lastShot = 0;
     p.points = 0; p.up = newUpgrades(); p.stats = newStats(); p.scope = 0; p.lastNade = 0; p.nadeAcc = 0;
     p.respawnAt = null; p.livesUsed = 0; p.lastSlam = 0; p.lastKnifeThrow = 0;
+    p.streak = 0; p.rewards = newRewards(); p.jetFuel = 0; p.jet = 0;
     p.nades = startNades(p);
     if (!p.isBot) sessionEntry(p).games++;
     if (p.isBot) {
@@ -649,6 +760,7 @@ function startMatch() {
   game.pickups = spots.map((s, i) => ({ id: i, type: lootType(), x: s[0], y: s[1], z: s[2], taken: false }));
   game.nextPickupId = game.pickups.length;
   game.nades = [];
+  game.turrets = []; game.strikes = [];
   game.bountyId = null;
   game.nextDropAt = SET().drops ? 50 : Infinity;
   game.locked = false;
@@ -875,6 +987,8 @@ setInterval(() => {
     game.time += dt;
     updateZone(dt * (M().zoneSpeed || 1) * SET().zoneSpeed);
     updateNades(dt);
+    updateTurrets(dt);
+    updateStrikes(dt);
     if (game.time >= game.nextDropAt && game.zone.stage !== 'closed') { spawnSupplyDrop(); game.nextDropAt = game.time + SET().drops; }
     if (isLocked() && !game.locked) { game.locked = true; broadcast({ t: 'lock' }); }
     for (const p of inMatch()) {
@@ -934,9 +1048,10 @@ setInterval(() => {
       t: 's',
       z: game.zone ? zoneInfo() : null,
       lk: game.locked ? 1 : 0,
+      tu: game.turrets.map((t) => [t.id, r2(t.x), r2(t.y), r2(t.z), r2(t.yaw), Math.ceil(t.hp), t.owner]),
       a: aliveList().length,
       b: game.bountyId,
-      p: inMatch().map((p) => [p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.crouch, p.glide, p.alive ? 1 : 0, Math.max(0, Math.ceil(p.hp)), Math.ceil(p.shield), p.kills, p.scope, p.respawnAt != null ? 1 : 0, !p.isBot && !p.ws ? 1 : 0]),
+      p: inMatch().map((p) => [p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.crouch, p.glide, p.alive ? 1 : 0, Math.max(0, Math.ceil(p.hp)), Math.ceil(p.shield), p.kills, p.scope, p.respawnAt != null ? 1 : 0, !p.isBot && !p.ws ? 1 : 0, p.jet]),
     };
     broadcast(snap);
   }

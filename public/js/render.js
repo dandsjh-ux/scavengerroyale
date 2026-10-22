@@ -68,6 +68,8 @@ export class Renderer {
     this.pickupMeshes = new Map();
     this.nadeMeshes = new Map();
     this.projectiles = [];
+    this.turrets = new Map();
+    this.wallhack = false;
     this.time = 0;
     this.shake = 0;
 
@@ -393,6 +395,10 @@ export class Renderer {
       a.body.scale.y = a.crouch ? 0.72 : 1;
       a.body.position.y = speed > 0.5 ? Math.abs(Math.sin(a.walk)) * 0.05 : 0;
       a.chute.visible = !!a.glide;
+      a.jetpack.visible = !!a.jet;
+      if (a.jet) { const f = 0.8 + Math.random() * 0.4; a.flames.forEach((fl) => fl.scale.set(1, f, 1)); }
+      a.ghost.visible = this.wallhack; // X-Ray Vision kill streak: see them through walls
+      a.tag.material.depthTest = !this.wallhack;
       a.gun.rotation.set(-a.pitch * 0.8, 0, 0);
       a.gun.position.z = -0.25;
       if (a.swingT > 0) {
@@ -419,6 +425,40 @@ export class Renderer {
         a.glint.scale.set(s, s, 1);
       }
     }
+  }
+
+  // ------------------------------------------------------------- kill streak turrets / airstrikes
+  syncTurrets(list, colors) {
+    const seen = new Set();
+    for (const [id, x, y, z, yaw, hp, owner] of list || []) {
+      seen.add(id);
+      let t = this.turrets.get(id);
+      if (!t) {
+        t = makeTurret(colors(owner));
+        t.root.position.set(x, y, z);
+        t.head.rotation.y = yaw;
+        this.scene.add(t.root);
+        this.turrets.set(id, t);
+      }
+      t.root.position.set(x, y, z);
+      t.targetYaw = yaw; t.hp = hp; t.owner = owner;
+    }
+    for (const [id, t] of this.turrets) if (!seen.has(id)) { this.scene.remove(t.root); this.turrets.delete(id); }
+  }
+  clearTurrets() { for (const t of this.turrets.values()) this.scene.remove(t.root); this.turrets.clear(); }
+
+  strikeMarker(x, z, secs) {
+    const g = new THREE.Group();
+    const ring = new THREE.Mesh(new THREE.RingGeometry(15, 16, 64), new THREE.MeshBasicMaterial({ color: 0xff2d55, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2;
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(15, 48), new THREE.MeshBasicMaterial({ color: 0xff2d55, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }));
+    disc.rotation.x = -Math.PI / 2;
+    const beamM = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 100, 10, 1, true), new THREE.MeshBasicMaterial({ color: 0xff2d55, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    beamM.position.y = 50;
+    g.add(ring, disc, beamM);
+    g.position.set(x, 0.4, z);
+    this.scene.add(g);
+    this.effects.push({ obj: g, life: secs, max: secs, pulse: ring });
   }
 
   // ------------------------------------------------------------- grenades
@@ -580,12 +620,20 @@ export class Renderer {
       e.life -= dt;
       const k = Math.max(0, e.life / e.max);
       if (e.fade) e.obj.material.opacity = k * 0.9;
+      if (e.pulse) e.pulse.material.opacity = 0.5 + Math.sin(this.time * 12) * 0.4;
       if (e.grow) e.obj.scale.setScalar(1 + (1 - k) * e.grow);
       if (e.rise) e.obj.position.y += e.rise * dt;
       if (e.life <= 0) {
-        this.scene.remove(e.obj); e.obj.geometry.dispose(); e.obj.material.dispose();
+        this.scene.remove(e.obj);
+        e.obj.traverse((o) => { if (o.geometry) { o.geometry.dispose(); o.material.dispose(); } });
         this.effects.splice(i, 1);
       }
+    }
+    for (const t of this.turrets.values()) {
+      let d = (t.targetYaw ?? 0) - t.head.rotation.y;
+      while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
+      t.head.rotation.y += d * Math.min(1, dt * 10);
+      t.light.material.color.setHex(Math.sin(this.time * 8) > 0 ? 0xff2d55 : 0x550000);
     }
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const P = this.particles[i];
@@ -621,7 +669,8 @@ export class Renderer {
   }
 
   clearEffects() {
-    for (const e of [...this.effects, ...this.particles]) { this.scene.remove(e.obj); e.obj.geometry.dispose(); e.obj.material.dispose(); }
+    for (const e of [...this.effects, ...this.particles]) { this.scene.remove(e.obj); e.obj.traverse((o) => { if (o.geometry) { o.geometry.dispose(); o.material.dispose(); } }); }
+    this.clearTurrets();
     for (const P of this.projectiles) this.scene.remove(P.obj);
     this.effects = []; this.particles = []; this.projectiles = [];
   }
@@ -924,6 +973,28 @@ function makeAvatar(info, glintTex) {
   else if (info.cls === 'rifle') gun.add(boxMesh(0.08, 0.12, 0.7, clsCol, 0, 0, -0.25), boxMesh(0.05, 0.15, 0.08, gm, 0, -0.12, -0.2));
   else gun.add(boxMesh(0.03, 0.05, 0.4, new THREE.MeshLambertMaterial({ color: 0xe0f7ff, emissive: 0xff3c8e, emissiveIntensity: 0.5 }), 0, 0, -0.2));
   body.add(gun);
+  // jetpack (only shown while flying)
+  const jetpack = new THREE.Group();
+  const tankM = new THREE.MeshLambertMaterial({ color: 0xb0b8c8 });
+  const flameM = new THREE.MeshBasicMaterial({ color: 0xff9e00, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+  const flames = [];
+  for (const sx of [-0.14, 0.14]) {
+    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.55, 10), tankM); tank.position.set(sx, 1.05, 0.38);
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.5, 8), flameM); flame.rotation.x = Math.PI;
+    const fp = new THREE.Group(); fp.position.set(sx, 0.75, 0.38); flame.position.y = -0.25; fp.add(flame);
+    jetpack.add(tank, fp); flames.push(fp);
+  }
+  jetpack.visible = false;
+  body.add(jetpack);
+  // wallhack silhouette, drawn on top of everything
+  const ghostM = new THREE.MeshBasicMaterial({ color: 0xff2d55, transparent: true, opacity: 0.45, depthTest: false, depthWrite: false });
+  const ghost = new THREE.Group();
+  const gb = new THREE.Mesh(new THREE.CapsuleGeometry(0.38, 0.8, 4, 8), ghostM); gb.position.y = 0.85;
+  const gh = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), ghostM); gh.position.y = 1.6;
+  ghost.add(gb, gh);
+  ghost.traverse((o) => { o.renderOrder = 999; });
+  ghost.visible = false;
+  root.add(ghost);
   // parachute
   const chute = new THREE.Group();
   const canopy = new THREE.Mesh(new THREE.SphereGeometry(2.2, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2.6),
@@ -948,7 +1019,7 @@ function makeAvatar(info, glintTex) {
   glint.position.set(0.15, 1.62, -0.6);
   glint.visible = false;
   body.add(glint);
-  return { root, body, legL, legR, gun, chute, tag, crown, dcIcon, glint, cls: info.cls, swingT: 0, pitch: 0 };
+  return { root, body, legL, legR, gun, chute, tag, crown, dcIcon, glint, jetpack, flames, ghost, cls: info.cls, swingT: 0, pitch: 0 };
 }
 
 function boxMesh(w, h, d, mat, x, y, z) {
@@ -1037,4 +1108,31 @@ function grassTexture() {
 function roundRect(g, x, y, w, h, r) {
   g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
   g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+}
+
+function makeTurret(color) {
+  const root = new THREE.Group();
+  const dark = new THREE.MeshLambertMaterial({ color: 0x2b2d42 });
+  const body = new THREE.MeshLambertMaterial({ color: new THREE.Color(color) });
+  for (let i = 0; i < 3; i++) { // tripod legs
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.9, 0.08), dark);
+    const a = (i / 3) * Math.PI * 2;
+    leg.position.set(Math.cos(a) * 0.3, 0.4, Math.sin(a) * 0.3);
+    leg.rotation.set(Math.sin(a) * 0.35, 0, -Math.cos(a) * 0.35);
+    root.add(leg);
+  }
+  const head = new THREE.Group();
+  head.position.y = 1.0;
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.4, 0.6), body);
+  box.castShadow = true;
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.8, 10), dark);
+  barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.05, -0.6);
+  const light = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff2d55 }));
+  light.position.set(0, 0.25, 0);
+  head.add(box, barrel, light);
+  root.add(head);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.65, 24), new THREE.MeshBasicMaterial({ color: new THREE.Color(color), side: THREE.DoubleSide, transparent: true, opacity: 0.8 }));
+  ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04;
+  root.add(ring);
+  return { root, head, light, hp: 0 };
 }
