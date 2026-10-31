@@ -61,6 +61,7 @@
         <div><span><kbd>R</kbd></span>Reload</div>
         <div><span><kbd>G</kbd></span>Hold to aim grenade</div>
         <div><span><kbd>V</kbd></span>Throw smoke grenade</div>
+        <div><span><kbd>M</kbd></span>Place a land mine</div>
         <div><span><kbd>E</kbd> <kbd>F</kbd></span>Knife dash / throw</div>
         <div><span><kbd>B</kbd></span>Shop</div>
         <div><span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></span>Kill streak rewards</div>
@@ -112,6 +113,8 @@
       <div id="ability"></div>
       <div id="nadeCount">💣 0</div>
       <div id="smokeCount"></div>
+      <div id="mineCount"></div>
+      <div id="nullCount"></div>
       <div id="jetFuel"></div>
     </div>
     <div id="zoneVignette"></div>
@@ -126,7 +129,7 @@
         <div class="pill pts" id="shopPts">🪙 0</div>
         <button id="shopClose" class="shop-close">✕</button>
       </div>
-      <p class="small">Earn 🪙 from kills (+100) and by scavenging coins (+20) and gems (+50) hidden in buildings. Keys 1–0 buy, B closes.</p>
+      <p class="small">Earn 🪙 from kills (+100) and by scavenging coins (+20) and gems (+50) hidden in buildings. Keys 1–0, -, = and [ buy, B closes. Cheapest first.</p>
       <div id="shopItems"></div>
       <div id="shopMsg"></div>
     </div>
@@ -180,9 +183,9 @@
     <button class="tbtn" id="tReload">RELOAD</button>
     <button class="tbtn small" id="tScore">☰</button>
     <button class="tbtn small" id="tShop">🛒</button>
-    <button class="tbtn" id="tNade">💣</button>
+    <button class="tbtn" id="tGear">💣</button>
+    <button class="tbtn small" id="tCycle" title="Switch throwable">⟳</button>
     <button class="tbtn small hidden" id="tStreak">⭐</button>
-    <button class="tbtn small hidden" id="tSmoke">🌫️</button>
     <div id="streakMenu" class="hidden"></div>
     <button class="tbtn" id="tKnife">🗡️</button>
   </div>

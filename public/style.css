@@ -176,7 +176,6 @@ select { font-family: inherit; font-size: 14px; padding: 5px 8px; border-radius:
 .award .at { font-size: 12px; opacity: .8; text-transform: uppercase; letter-spacing: 1px; }
 .award .an { font-weight: 900; font-size: 17px; }
 .award .av { font-size: 13px; opacity: .85; }
-#tNade { right: 260px; bottom: 150px; background: rgba(61, 220, 151, .5); font-size: 26px; }
 body.touch #banner { top: 60px; font-size: 18px; }
 body.touch #nadeCount { font-size: 16px; }
 
@@ -233,9 +232,15 @@ body.touch #streakBar { bottom: 74px; left: 50%; transform: translateX(-50%); }
 #wpBag span { background: #3ddc97; color: #10301f; font-weight: bold; padding: 1px 7px; border-radius: 8px; font-size: 12px; }
 #wpBag i { opacity: .7; }
 #wpWorth { font-weight: bold; }
-body.touch #wordPanel { top: 150px; width: 210px; }
+body.touch #wordPanel { top: auto; bottom: 215px; width: 210px; }
 
 /* ---------- v6: smoke, nullifier ---------- */
 #smokeCount { font-size: 14px; font-weight: bold; color: #dfe6ee; }
-#tSmoke { top: 368px; right: 20px; width: 48px; height: 48px; font-size: 20px; background: rgba(200, 210, 225, .6); }
 #nullBadge { position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); background: rgba(76, 201, 240, .85); color: #08243a; font-weight: 900; padding: 4px 14px; border-radius: 14px; }
+
+/* ---------- v7: gear button, mines ---------- */
+#tGear { right: 260px; bottom: 150px; background: rgba(61, 220, 151, .5); font-size: 26px; line-height: 1; }
+#tGear small { display: block; font-size: 12px; margin-top: 2px; }
+#tCycle { right: 318px; bottom: 206px; width: 36px; height: 36px; font-size: 18px; padding: 0; background: rgba(255,255,255,.75); color: #222; }
+#mineCount, #nullCount { font-size: 14px; font-weight: bold; }
+#nullCount { color: #4cc9f0; }

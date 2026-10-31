@@ -15,7 +15,7 @@ import {
   MEDKIT_HEAL, SHIELD_GAIN, DROP_HEIGHT, EYE_HEIGHT, BODY_HEIGHT, computeDamage, MAP_HALF,
   POINTS, SHOP_ITEMS, DMG_UPGRADE, GRENADE, MUTATORS, mut, BOT_SKILL, DROP_FALL_SPEED,
   KNIFE, RESPAWN_DROP_HEIGHT, SHOP_NEEDS_ALIVE, SETTINGS, defaultSettings, allowedClasses,
-  STREAKS, TURRET, AIRSTRIKE, JETPACK, WORD_CATEGORIES, WORDS, wordPayout, NULLIFIER_TIME, SMOKE,
+  STREAKS, TURRET, AIRSTRIKE, JETPACK, WORD_CATEGORIES, WORDS, wordPayout, NULLIFIER_TIME, SMOKE, MINE,
 } from './public/shared/config.js';
 import { generateMap } from './public/shared/map.js';
 import { World, stepBody, stepGrenade, lineOfSight } from './public/shared/physics.js';
@@ -133,6 +133,8 @@ const game = {
   turrets: [],
   strikes: [],
   smokes: [],         // active smoke clouds {x,y,z,until}
+  mines: [],          // placed land mines {id, owner, x,y,z, armAt}
+  nextMineId: 1,
   words: [],          // word scavenge: words currently floating in the world
   wordRound: null,    // { cat, endsAt }
   catOrder: [],
@@ -186,7 +188,7 @@ function makePlayer(fields) {
     hp: MAX_HP, shield: 0, alive: false, inMatch: false, kills: 0, place: 0,
     lastShot: 0, joinedAt: Date.now(), points: 0, up: newUpgrades(), nades: 0, lastNade: 0, scope: 0,
     lastSlam: 0, lastKnifeThrow: 0, respawnAt: null, livesUsed: 0,
-    streak: 0, rewards: newRewards(), jetFuel: 0, jet: 0, bag: [], smokes: 0, nullUntil: 0,
+    streak: 0, rewards: newRewards(), jetFuel: 0, jet: 0, bag: [], smokes: 0, nullUntil: 0, nullifiers: 0, mines: 0,
     stats: newStats(), ...fields,
   };
 }
@@ -215,7 +217,7 @@ function givePoints(p, n, why) {
   send(p, { t: 'pts', pts: p.points, up: p.up, gain: n, why });
 }
 
-function sendInv(p) { send(p, { t: 'inv', nades: p.nades, max: maxNades(p), smokes: p.smokes }); }
+function sendInv(p) { send(p, { t: 'inv', nades: p.nades, max: maxNades(p), smokes: p.smokes, mines: p.mines, nullifiers: p.nullifiers }); }
 
 function onBuy(p, id) {
   const item = SHOP_ITEMS.find((i) => i.id === id);
@@ -232,6 +234,7 @@ function onBuy(p, id) {
   if (id === 'nade' && p.nades >= maxNades(p)) return fail(`You can only carry ${maxNades(p)} grenades`);
   if (id === 'jetpack' && p.jetFuel >= JETPACK.fuel - 1) return fail('Your jetpack tank is already full');
   if (id === 'smoke' && p.smokes >= SMOKE.max) return fail(`You can only carry ${SMOKE.max} smoke grenades`);
+  if (id === 'mine' && p.mines >= MINE.max) return fail(`You can only carry ${MINE.max} mines`);
   const cost = itemCost(item);
   if (p.points < cost) return fail(`Need ${cost - p.points} more points`);
   p.points -= cost;
@@ -241,7 +244,8 @@ function onBuy(p, id) {
   else if (id === 'nade') { p.nades++; sendInv(p); }
   else if (id === 'jetpack') p.jetFuel = JETPACK.fuel;
   else if (id === 'smoke') { p.smokes++; sendInv(p); }
-  else if (id === 'nullify') { p.up.nullify = (p.up.nullify || 0) + 1; p.nullUntil = game.time + NULLIFIER_TIME; send(p, { t: 'nullify', time: NULLIFIER_TIME }); }
+  else if (id === 'mine') { p.mines++; sendInv(p); }
+  else if (id === 'nullify') { p.up.nullify = (p.up.nullify || 0) + 1; p.nullifiers++; sendInv(p); } // kept until the zone touches you
   else if (item.max) p.up[id] = (p.up[id] || 0) + 1;
   send(p, { t: 'pts', pts: p.points, up: p.up, gain: 0, bought: id });
 }
@@ -336,6 +340,7 @@ function reconnect(p, ws, addr) {
       nullIn: Math.max(0, r2(p.nullUntil - game.time)),
     });
     sendWordRound(p);
+    sendInv(p);
     broadcast({ t: 'dc', id: p.id, on: 0 }, p);
   } else if (game.phase === 'playing') {
     send(p, { t: 'start', seed: game.seed, spectator: true, mut: game.mut, pickups: game.pickups.map(pickupWire) });
@@ -398,6 +403,7 @@ function handle(p, m) {
     case 'melee': onMelee(p, m); break;
     case 'nade': onNade(p, m); break;
     case 'streakUse': onStreakUse(p, m); break;
+    case 'mine': onMine(p); break;
     case 'buy': onBuy(p, String(m.item)); break;
     case 'chat': if (typeof m.s === 'string') broadcast({ t: 'chat', id: p.id, s: m.s.slice(0, 120) }); break;
   }
@@ -499,6 +505,29 @@ function throwNade(p, o, v, k = 'nade') {
   broadcast({ t: 'nade', id: g.id, owner: p.id, o, v, k });
 }
 
+// ------------------------------------------------------------------ land mines
+function onMine(p) {
+  if (!p.inMatch || !p.alive || p.glide || p.mines <= 0 || game.phase !== 'playing') return;
+  const top = p.y + 1;
+  const y = Math.max(0, top - game.world.raycast(p.x, top, p.z, 0, -1, 0, 50));
+  p.mines--;
+  sendInv(p);
+  game.mines.push({ id: game.nextMineId++, owner: p.id, x: p.x, y, z: p.z, armAt: game.time + MINE.armTime });
+  const own = game.mines.filter((m) => m.owner === p.id);
+  if (own.length > MINE.perPlayer) game.mines.splice(game.mines.indexOf(own[0]), 1); // oldest one goes
+}
+
+function updateMines() {
+  for (let i = game.mines.length - 1; i >= 0; i--) {
+    const m = game.mines[i];
+    if (game.time < m.armAt) continue;
+    const victim = aliveList().find((v) => v.id !== m.owner && !v.glide && Math.hypot(v.x - m.x, v.z - m.z) < MINE.trigger && Math.abs(v.y - m.y) < 2);
+    if (!victim) continue;
+    game.mines.splice(i, 1);
+    blast(m.x, m.y + 0.3, m.z, players.get(m.owner) || null, { radius: MINE.radius, max: MINE.maxDamage, min: MINE.minDamage, self: 0.5, weapon: 'mine' });
+  }
+}
+
 // Smoke clouds block line of sight for bots and turrets (players just can't see through them).
 function smokeBlocks(ax, ay, az, bx, by, bz) {
   for (const sm of game.smokes) {
@@ -581,6 +610,7 @@ function wordSpots(n) {
 }
 
 function startWordRound() {
+  if (isLocked()) { game.wordRound = null; game.words = []; return; }
   if (!game.catOrder.length) game.catOrder = shuffled(WORD_CATEGORIES.map((c) => c.id));
   const nextId = game.catOrder.shift();
   const cat = WORD_CATEGORIES.find((c) => c.id === nextId);
@@ -858,7 +888,7 @@ function startMatch() {
     p.inMatch = true; p.alive = true; p.hp = MAX_HP; p.shield = startShield(p); p.kills = 0; p.place = 0; p.lastShot = 0;
     p.points = 0; p.up = newUpgrades(); p.stats = newStats(); p.scope = 0; p.lastNade = 0; p.nadeAcc = 0;
     p.respawnAt = null; p.livesUsed = 0; p.lastSlam = 0; p.lastKnifeThrow = 0;
-    p.streak = 0; p.rewards = newRewards(); p.jetFuel = 0; p.jet = 0; p.bag = []; p.smokes = 0; p.nullUntil = 0;
+    p.streak = 0; p.rewards = newRewards(); p.jetFuel = 0; p.jet = 0; p.bag = []; p.smokes = 0; p.nullUntil = 0; p.nullifiers = 0; p.mines = 0;
     p.nades = startNades(p);
     if (!p.isBot) sessionEntry(p).games++;
     if (p.isBot) {
@@ -880,7 +910,7 @@ function startMatch() {
   game.nextPickupId = game.pickups.length;
   game.nades = [];
   game.turrets = []; game.strikes = [];
-  game.words = []; game.wordRound = null; game.catOrder = []; game.smokes = [];
+  game.words = []; game.wordRound = null; game.catOrder = []; game.smokes = []; game.mines = [];
   game.bountyId = null;
   game.nextDropAt = SET().drops ? 50 : Infinity;
   game.locked = false;
@@ -1111,9 +1141,21 @@ setInterval(() => {
     updateTurrets(dt);
     updateStrikes(dt);
     game.smokes = game.smokes.filter((sm) => sm.until > game.time);
-    if (game.wordRound && game.time >= game.wordRound.endsAt) { cashInWords(); startWordRound(); }
+    if (game.wordRound && game.time >= game.wordRound.endsAt) {
+      cashInWords(); startWordRound();
+      if (!game.wordRound) broadcast({ t: 'wround', cat: null, left: 0, words: [], bag: [] });
+    }
     if (game.time >= game.nextDropAt && game.zone.stage !== 'closed') { spawnSupplyDrop(); game.nextDropAt = game.time + SET().drops; }
-    if (isLocked() && !game.locked) { game.locked = true; broadcast({ t: 'lock' }); }
+    if (isLocked() && !game.locked) {
+      game.locked = true;
+      broadcast({ t: 'lock' });
+      if (game.wordRound) { // no more word hunts in the final circles: pay out what people hold and clear the map
+        cashInWords();
+        game.wordRound = null; game.words = [];
+        broadcast({ t: 'wround', cat: null, left: 0, words: [], bag: [] });
+      }
+    }
+    updateMines();
     for (const p of inMatch()) {
       if (!p.alive && p.respawnAt != null && game.time >= p.respawnAt && (p.isBot || p.ws)) respawnPlayer(p); // held until they reconnect
     }
@@ -1136,7 +1178,12 @@ setInterval(() => {
         if (p.nadeAcc >= M().nadeRefill) { p.nadeAcc = 0; p.nades++; sendInv(p); }
       }
       // zone damage
-      if (Math.hypot(p.x - z.cx, p.z - z.cz) > z.r && !p.glide && !(p.nullUntil > game.time)) {
+      const inStorm = Math.hypot(p.x - z.cx, p.z - z.cz) > z.r && !p.glide;
+      if (inStorm && !(p.nullUntil > game.time) && p.nullifiers > 0) { // stored Nullifier kicks in on contact with the zone
+        p.nullifiers--; p.nullUntil = game.time + NULLIFIER_TIME;
+        sendInv(p); send(p, { t: 'nullify', time: NULLIFIER_TIME });
+      }
+      if (inStorm && !(p.nullUntil > game.time)) {
         p.zoneAcc = (p.zoneAcc || 0) + dps * dt;
         if (p.zoneAcc >= 1) {
           const a = Math.floor(p.zoneAcc); p.zoneAcc -= a;
@@ -1172,6 +1219,7 @@ setInterval(() => {
       z: game.zone ? zoneInfo() : null,
       lk: game.locked ? 1 : 0,
       wr: game.wordRound ? [game.wordRound.cat, Math.max(0, Math.ceil(game.wordRound.endsAt - game.time))] : null,
+      mi: game.mines.map((m) => [m.id, r2(m.x), r2(m.y), r2(m.z), m.owner]),
       tu: game.turrets.map((t) => [t.id, r2(t.x), r2(t.y), r2(t.z), r2(t.yaw), Math.ceil(t.hp), t.owner]),
       a: aliveList().length,
       b: game.bountyId,

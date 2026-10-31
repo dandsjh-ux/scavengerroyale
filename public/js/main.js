@@ -3,7 +3,7 @@ import {
   CLASSES, BODY_HEIGHT, CROUCH_HEIGHT, EYE_HEIGHT, CROUCH_EYE, GLIDE_FALL_SPEED, GLIDE_MOVE_SPEED, MAX_HP, MAX_SHIELD, MAP_HALF,
   SHOP_ITEMS, SPEED_UPGRADE, JUMP_UPGRADE, MAG_UPGRADE, RADAR_TIME, GRENADE, MUTATORS, mut, BOT_SKILL,
   KNIFE, SETTINGS, defaultSettings, allowedClasses, SHOP_NEEDS_ALIVE,
-  STREAKS, AIRSTRIKE, JETPACK, GRAVITY, WORD_CATEGORIES, wordPayout, WORDS, NULLIFIER_TIME, SMOKE,
+  STREAKS, AIRSTRIKE, JETPACK, GRAVITY, WORD_CATEGORIES, wordPayout, WORDS, NULLIFIER_TIME, SMOKE, MINE,
 } from '../shared/config.js';
 import { generateMap } from '../shared/map.js';
 import { World, stepBody, stepGrenade, raySphere, rayBox, lineOfSight } from '../shared/physics.js';
@@ -96,12 +96,12 @@ function onMessage(m) {
     case 'end': onEnd(m); break;
     case 'pts': onPoints(m); break;
     case 'shopfail': $('shopMsg').textContent = m.msg; break;
-    case 'inv': S.nades = m.nades; S.maxNades = m.max; S.smokes = m.smokes || 0; break;
+    case 'inv': S.nades = m.nades; S.maxNades = m.max; S.smokes = m.smokes || 0; S.mines = m.mines || 0; S.nullifiers = m.nullifiers || 0; break;
     case 'smoke':
       S.nadeSims.delete(m.id); R.removeNade(m.id); R.addSmoke(m.p, m.dur);
       SFX.sfxSwing(SFX.at(m.p, HEAR.smoke), 0.4);
       break;
-    case 'nullify': S.nullUntil = performance.now() / 1000 + m.time; flashCenter('🧿 Nullifier active!', `The zone can't hurt you for ${m.time} s`, 2); break;
+    case 'nullify': S.nullUntil = performance.now() / 1000 + m.time; flashCenter('🧿 Nullifier triggered!', `You touched the zone: immune for ${m.time} s`, 2); SFX.sfxPickup('shield'); break;
     case 'nade': onNadeThrown(m); break;
     case 'boom': onBoom(m); break;
     case 'pkadd': R.addPickups(m.list); break;
@@ -118,7 +118,7 @@ function onMessage(m) {
     case 'wcash': flashCenter(`💰 Words cashed in!`, `${m.n} word${m.n > 1 ? 's' : ''} → ${m.pts} 🪙`, 2.5); SFX.sfxCash(); break;
     case 'lock':
       S.locked = true; closeShop();
-      banner(`🔒 Final circles! ${S.settings.respawn === 'on' ? 'Respawns' : 'Eliminations are final'} and the shop are now closed`);
+      banner(`🔒 Final circles! ${S.settings.respawn === 'on' ? 'Respawns,' : 'Eliminations are final;'} the shop and word hunts are now closed`);
       break;
   }
 }
@@ -288,7 +288,7 @@ function onStart(m) {
   S.mut = m.mut || 'classic'; S.bountyId = null; S.marks.clear(); S.bloom = 0;
   S.locked = false; S.myKills = 0; S.respawnAt = 0; S.combo = 0; S.lastSlam = 0; S.lastKnifeThrow = 0;
   S.streak = 0; S.rewards = {}; S.wallhackUntil = 0; S.strikes = []; S.jetFuel = 0; closeStrikeMap();
-  S.wordCat = null; S.bag = []; S.smokes = 0; S.nullUntil = 0;
+  S.wordCat = null; S.bag = []; S.smokes = 0; S.nullUntil = 0; S.mines = 0; S.nullifiers = 0;
   const mu = mut(S.mut);
   $('mutPill').textContent = S.mut === 'classic' ? '' : `${mu.icon} ${mu.name}`;
   if (S.mut !== 'classic') setTimeout(() => banner(`${mu.icon} ${mu.name}: ${mu.desc}`), 4500);
@@ -328,7 +328,7 @@ function spawnLocal([x, y, z], yaw, kills) {
   input.setAimButton(S.cls === 'melee' ? 'DASH' : S.cls === 'sniper' ? 'SCOPE' : 'AIM', S.cls !== 'melee');
   input.resetTouchToggles();
   $('tKnife').classList.toggle('hidden', S.cls !== 'melee');
-  $('tNade').classList.toggle('hidden', S.settings.grenades === 'off');
+  S.gear = 'nade';
   $('deathScreen').classList.add('hidden');
   if (touch) $('touch').classList.remove('hidden');
   else if (!input.locked) $('clickToPlay').classList.remove('hidden');
@@ -421,6 +421,7 @@ function onSnap(m) {
   S.zone = m.z; S.aliveCount = m.a; S.bountyId = m.b ?? null; S.locked = !!m.lk;
   if (m.wr) { S.wordCat = m.wr[0]; S.wordEnds = performance.now() / 1000 + m.wr[1]; } else S.wordCat = null;
   R.syncTurrets(m.tu, (id) => (S.info.get(id) || { color: '#999999' }).color);
+  R.syncMines(m.mi, S.myId);
   R.setZone(m.z);
   const seen = new Set();
   for (const e of m.p) {
@@ -459,7 +460,7 @@ function onFx(m) {
   }
 }
 
-const WEAPON_ICON = { sniper: '🔭', rifle: '🔫', melee: '🔪', throw: '🗡️', nade: '💣', turret: '🤖', strike: '✈️', zone: '☠️', left: '🚪' };
+const WEAPON_ICON = { sniper: '🔭', rifle: '🔫', melee: '🔪', throw: '🗡️', nade: '💣', mine: '🧨', turret: '🤖', strike: '✈️', zone: '☠️', left: '🚪' };
 function onKill(m) {
   const k = m.k != null ? S.info.get(m.k) : null, v = S.info.get(m.v);
   const va = R.avatars.get(m.v);
@@ -758,13 +759,27 @@ function updateLocal(dt) {
   // number keys outside the shop fire kill streak rewards
   if (!S.shopOpen) {
     for (const k of STREAKS) if (input.take('buy' + k.key)) useStreak(k.id);
-    for (let i = 1; i <= 10; i++) input.take('buy' + i);
+    for (let i = 1; i <= 13; i++) input.take('buy' + i);
   }
   if (input.take('streakMenu')) toggleStreakMenu();
 
   // grenades: hold to aim (arc preview), release to throw
   const canNade = !me.glide && !S.shopOpen;
   if (input.nadeHeld && canNade && S.nades > 0) predictArc(); else R.setArc(null);
+  // land mine: dropped where you stand (M or the tablet gear button)
+  if (input.take('minePlace') && !me.glide) {
+    if (S.mines <= 0) flashCenter('No mines', 'Buy them in the shop (🧨)', 1.2);
+    else if (!me.onGround) flashCenter('Land first to place a mine', '', 1);
+    else if (now - S.lastThrow >= 0.5) { S.lastThrow = now; S.mines--; send({ t: 'mine' }); SFX.sfxReload(); flashCenter('🧨 Mine placed', 'It arms in 1.5 s', 1.2); }
+  }
+  // tablet gear button: rotate between the throwables you're carrying
+  const gearItems = [['nade', S.nades, '💣'], ['smoke', S.smokes, '🌫️'], ['mine', S.mines, '🧨']].filter((g) => g[1] > 0);
+  if (input.take('gearCycle') && gearItems.length > 1) {
+    const i = gearItems.findIndex((g) => g[0] === S.gear);
+    S.gear = gearItems[(i + 1) % gearItems.length][0];
+  }
+  if (!gearItems.some((g) => g[0] === S.gear) && gearItems.length) S.gear = gearItems[0][0];
+  input.gearItem = S.gear;
   if (input.take('smokeThrow') && canNade) {
     if (S.smokes <= 0) flashCenter('No smoke grenades', 'Buy them in the shop (🌫️)', 1.2);
     else if (now - S.lastThrow >= GRENADE.cooldown) {
@@ -1044,6 +1059,7 @@ function onPoints(m) {
     const item = SHOP_ITEMS.find((i) => i.id === m.bought);
     $('shopMsg').textContent = '';
     if (m.bought === 'radar') S.radarUntil = performance.now() / 1000 + RADAR_TIME;
+    if (m.bought === 'nullify') setTimeout(() => flashCenter('🧿 Nullifier stored', 'It triggers by itself the moment you touch the zone', 2.5), 1300);
     if (m.bought === 'jetpack') { S.jetFuel = JETPACK.fuel; setTimeout(() => flashCenter('🚀 Jetpack ready!', 'Double-tap jump to fly · jump again to land · crouch to sink', 3), 1300); }
     SFX.sfxPickup(m.bought === 'med' ? 'med' : 'shield');
     flashCenter(`Bought ${item.icon} ${item.name}`, '', 1.2);
@@ -1071,7 +1087,7 @@ function renderShop() {
     const b = document.createElement('button');
     b.className = 'shop-item';
     b.disabled = maxed || blocked || needsAlive || S.points < cost;
-    b.innerHTML = `<span class="key">${touch ? '' : ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '='][i] || ''}</span>${it.max ? `<span class="lvl">${lvl}/${it.max}</span>` : ''}` +
+    b.innerHTML = `<span class="key">${touch ? '' : ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '['][i] || ''}</span>${it.max ? `<span class="lvl">${lvl}/${it.max}</span>` : ''}` +
       `<div class="ic">${it.icon}</div><div class="nm">${it.name}</div><div class="ds">${blocked ? 'Not available' : needsAlive ? 'Buy after you respawn' : it.desc}</div>` +
       `<div class="cost">${maxed ? 'MAXED' : `🪙 ${cost}`}</div>`;
     b.addEventListener('click', () => buy(it.id));
@@ -1376,7 +1392,15 @@ function updateHud(dt) {
     } else setText('ability', '');
     setText('nadeCount', S.maxNades ? `💣 ${S.nades} / ${S.maxNades}${touch ? '' : '  [G]'}` : '');
     setText('smokeCount', S.smokes > 0 ? `🌫️ ${S.smokes} / ${SMOKE.max}${touch ? '' : '  [V]'}` : '');
-    $('tSmoke').classList.toggle('hidden', !(S.smokes > 0));
+    setText('mineCount', S.mines > 0 ? `🧨 ${S.mines} / ${MINE.max}${touch ? '' : '  [M]'}` : '');
+    setText('nullCount', S.nullifiers > 0 ? `🧿 ${S.nullifiers} stored (auto)` : '');
+    // tablet gear button shows the selected throwable and how many are left
+    const gItems = [['nade', S.nades, '💣'], ['smoke', S.smokes, '🌫️'], ['mine', S.mines, '🧨']].filter((g) => g[1] > 0);
+    const cur = gItems.find((g) => g[0] === S.gear);
+    const gk = cur ? `${cur[2]}<small>${cur[1]}</small>` : '';
+    if (hudCache.gear !== gk) { hudCache.gear = gk; $('tGear').innerHTML = gk; }
+    $('tGear').classList.toggle('hidden', !cur);
+    $('tCycle').classList.toggle('hidden', gItems.length < 2);
     const nullLeft = S.nullUntil - performance.now() / 1000;
     $('nullBadge').classList.toggle('hidden', !(nullLeft > 0 && me.alive));
     if (nullLeft > 0) setText('nullBadge', `🧿 Zone immune ${Math.ceil(nullLeft)} s`);

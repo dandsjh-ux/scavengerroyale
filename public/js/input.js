@@ -13,6 +13,7 @@ export class Input {
     this.pressed = new Set(); // edge-triggered actions: jump, reload, dash, aimTap
     this.showScores = false;
     this.nadeHeld = false;      // grenade aim held (G key / bomb button); releasing throws
+    this.gearItem = 'nade';     // tablet: which throwable the gear button uses (main.js rotates it)
     this.locked = false;
     this.enabled = false;
     this.sensitivity = 0.0022;
@@ -36,6 +37,8 @@ export class Input {
         if (e.code === 'KeyV') this.pressed.add('smokeThrow');
         if (e.code === 'Minus') this.pressed.add('buy11');
         if (e.code === 'Equal') this.pressed.add('buy12');
+        if (e.code === 'BracketLeft') this.pressed.add('buy13');
+        if (e.code === 'KeyM') this.pressed.add('minePlace');
         if (/^Digit[0-9]$/.test(e.code)) this.pressed.add('buy' + (e.code === 'Digit0' ? '10' : e.code.slice(5)));
       }
       this.keys.add(e.code);
@@ -123,12 +126,18 @@ export class Input {
     fire.addEventListener('pointerup', endFire);
     fire.addEventListener('pointercancel', endFire);
 
-    // bomb button: hold to show the arc (drag to aim), release to throw
-    const nade = $('tNade');
-    nade.addEventListener('pointerdown', (e) => { e.preventDefault(); this.nadeHeld = true; startLook(nade, e); nade.classList.add('on'); });
-    nade.addEventListener('pointermove', moveLook);
-    nade.addEventListener('pointerup', (e) => { if (this.nadeHeld) this.pressed.add('nadeThrow'); this.nadeHeld = false; endLook(e); nade.classList.remove('on'); });
-    nade.addEventListener('pointercancel', (e) => { this.nadeHeld = false; endLook(e); nade.classList.remove('on'); });
+    // gear button (grenade / smoke / mine, rotated with the small ⟳ button):
+    // grenade = hold to show the arc (drag to aim), release to throw; smoke and mine = tap
+    const gear = $('tGear');
+    gear.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      if (this.gearItem === 'nade') { this.nadeHeld = true; startLook(gear, e); }
+      else this.pressed.add(this.gearItem === 'smoke' ? 'smokeThrow' : 'minePlace');
+      gear.classList.add('on');
+    });
+    gear.addEventListener('pointermove', moveLook);
+    gear.addEventListener('pointerup', (e) => { if (this.nadeHeld) this.pressed.add('nadeThrow'); this.nadeHeld = false; endLook(e); gear.classList.remove('on'); });
+    gear.addEventListener('pointercancel', (e) => { this.nadeHeld = false; endLook(e); gear.classList.remove('on'); });
 
     const tap = (id, fn) => $(id).addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); fn($(id)); });
     tap('tJump', () => this.pressed.add('jump'));
@@ -139,7 +148,7 @@ export class Input {
     tap('tShop', () => this.pressed.add('shop'));
     tap('tKnife', () => this.pressed.add('knifeThrow'));
     tap('tStreak', () => this.pressed.add('streakMenu'));
-    tap('tSmoke', () => this.pressed.add('smokeThrow'));
+    tap('tCycle', () => this.pressed.add('gearCycle'));
   }
 
   setAimButton(label, toggleable) {

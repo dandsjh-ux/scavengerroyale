@@ -71,6 +71,10 @@ export class Renderer {
     this.turrets = new Map();
     this.words = new Map();
     this.smokes = [];
+    this.mines = new Map();
+    this.mineGeo = new THREE.CylinderGeometry(0.32, 0.38, 0.12, 10);
+    this.mineMat = new THREE.MeshLambertMaterial({ color: 0x3a3f4b });
+    this.mineLedGeo = new THREE.SphereGeometry(0.06, 6, 4);
     // smoke: one shared 20-triangle shape for every puff keeps it cheap even on tablets
     this.puffGeo = new THREE.IcosahedronGeometry(1, 0);
     this.wallhack = false;
@@ -458,6 +462,26 @@ export class Renderer {
     for (const s of this.words.values()) s.position.y = s.userData.baseY + Math.sin(this.time * 2 + s.position.x * 0.7) * 0.15;
   }
 
+  // ------------------------------------------------------------- land mines (small and low to the ground: hard to spot)
+  syncMines(list, myId) {
+    const seen = new Set();
+    for (const [id, x, y, z, owner] of list || []) {
+      seen.add(id);
+      if (this.mines.has(id)) continue;
+      const g = new THREE.Group();
+      const disc = new THREE.Mesh(this.mineGeo, this.mineMat); disc.position.y = 0.06;
+      const led = new THREE.Mesh(this.mineLedGeo, new THREE.MeshBasicMaterial({ color: owner === myId ? 0x4cc9f0 : 0xff2d55 }));
+      led.position.y = 0.14;
+      g.add(disc, led);
+      g.position.set(x, y, z);
+      g.userData.led = led;
+      this.scene.add(g);
+      this.mines.set(id, g);
+    }
+    for (const [id, g] of this.mines) if (!seen.has(id)) { this.scene.remove(g); g.userData.led.material.dispose(); this.mines.delete(id); }
+  }
+  clearMines() { this.syncMines([], null); }
+
   // ------------------------------------------------------------- smoke grenades
   addSmoke(pos, dur) {
     const mat = new THREE.MeshLambertMaterial({ color: 0xdfe6ee, emissive: 0x4a5260, flatShading: true, transparent: true, opacity: 0.96, side: THREE.DoubleSide });
@@ -740,6 +764,7 @@ export class Renderer {
     this.clearTurrets();
     this.clearWords();
     this.clearSmokes();
+    this.clearMines();
     for (const P of this.projectiles) this.scene.remove(P.obj);
     this.effects = []; this.particles = []; this.projectiles = [];
   }
@@ -849,6 +874,8 @@ export class Renderer {
     this.updatePickups(dt);
     this.updateWords();
     this.updateSmokes(dt);
+    const blink = Math.sin(this.time * 6) > 0.6;
+    for (const g of this.mines.values()) g.userData.led.visible = blink;
     this.zoneMat.uniforms.time.value = this.time;
     this.waterMat.uniforms.time.value = this.time;
     this.clouds.rotation.y += dt * 0.004;

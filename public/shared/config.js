@@ -122,9 +122,11 @@ export const SHOP_ITEMS = [
   { id: 'radar', name: 'Radar Ping', icon: '📡', desc: 'All enemies on your minimap for 12 s', cost: 120 },
   { id: 'nade', name: 'Grenade', icon: '💣', desc: '+1 grenade (up to your class max)', cost: 50 },
   { id: 'jetpack', name: 'Jetpack', icon: '🚀', desc: '30 s of flight. Double-tap jump to fly, jump again to land', cost: 500 },
-  { id: 'nullify', name: 'Nullifier', icon: '🧿', desc: '10 s immune to the zone (max 3 per match)', cost: 150, max: 3 },
+  { id: 'nullify', name: 'Nullifier', icon: '🧿', desc: 'Kept until you touch the zone, then 10 s of zone immunity (max 3 per match)', cost: 800, max: 3 },
   { id: 'smoke', name: 'Smoke Grenade', icon: '🌫️', desc: 'Throw (V) for a 10 s smoke screen. Carry up to 3', cost: 70 },
-];
+  { id: 'mine', name: 'Land Mine', icon: '🧨', desc: 'Place with M. Blows up when an enemy steps near. Carry up to 3', cost: 90 },
+].sort((a, b) => a.cost - b.cost); // the shop is listed cheapest first
+export const MINE = { max: 3, armTime: 1.5, trigger: 2.2, radius: 5.5, maxDamage: 110, minDamage: 25, perPlayer: 6 };
 export const NULLIFIER_TIME = 10;
 export const SMOKE = { max: 3, fuse: 1.2, duration: 10, radius: 4.5, puffs: 9 };
 export const DMG_UPGRADE = 0.2, SPEED_UPGRADE = 0.12, JUMP_UPGRADE = 0.3, MAG_UPGRADE = 0.5;
@@ -181,7 +183,7 @@ export const KNIFE = {
 // ---------- respawns ----------
 export const RESPAWN_DROP_HEIGHT = 70;
 // Shop items that only make sense while you're alive (upgrades can be bought while waiting to respawn).
-export const SHOP_NEEDS_ALIVE = ['med', 'shield', 'bigshield', 'nade', 'radar', 'jetpack', 'nullify', 'smoke'];
+export const SHOP_NEEDS_ALIVE = ['med', 'shield', 'bigshield', 'nade', 'radar', 'jetpack', 'smoke', 'mine'];
 
 // ---------- jetpack (shop) ----------
 export const JETPACK = {
