@@ -10,7 +10,12 @@ A bright, colourful first-person **battle royale** for up to **8 players on your
 - **Grenades 💣**: hold **G** (or the 💣 button on a tablet) to see the throw arc and blast radius, then release to throw. They bounce off walls, explode after 2.4 s and knock players back. Walls block the blast. The server simulates every grenade, so all players see the same bounces.
 - **Supply drops 📦**: about every 75 s a crate parachutes into the next safe zone, marked by a tall light beam and on the minimap. It gives full shield, +50 health, 2 grenades and 150 points, so expect a fight over it.
 - **Loot bags 💰**: eliminated players drop a bag worth some of their points, plus a grenade if they had one.
-- **Kill streak rewards 🔥**: these are earned by getting kills in a row without dying. Use them with the number keys **1–4**, or the ⭐ menu on a tablet:
+- **Word scavenge 🔤**: every minute a new category is announced, for example *Animals*. Words float around the safe zone, on the ground, inside buildings and on rooftops.
+  - **Collect:** shoot or stab the words that belong to the category (DOG, CAT, ZEBRA…). Distractor words from other categories earn nothing.
+  - **Cash-in:** when the minute ends, your words pay out **exponentially**: 1 word is worth 25, 3 words 109, 5 words 274, and 10 words 1,745 points.
+  - **Knocked out before the cash-in:** your words spill out around you for anyone to grab.
+  - **Categories:** Animals, Fruits, Colours, Body Parts, Transport, Food, Weather, Clothes, School Things and Family, about 15 primary-level words each. Edit them in `WORD_CATEGORIES` in [`public/shared/config.js`](public/shared/config.js).
+- - **Kill streak rewards 🔥**: these are earned by getting kills in a row without dying. Use them with the number keys **1–4**, or the ⭐ menu on a tablet:
   - **3** kills: 📡 Radar, which shows every enemy on your minimap for 30 s
   - **6** kills: 🤖 Sentry Turret, which you place on the ground. It auto-fires at enemies until someone shoots it down.
   - **8** kills: 👁️ X-Ray Vision, which shows enemies through walls for 60 s
@@ -87,7 +92,7 @@ The host (👑, the first person in the lobby) sets up each match from the lobby
 | Combat | Weapon damage, bonus starting shield, grenades (off / normal / double), kill streak rewards on/off |
 | Classes | Allow or ban Sniper, Rifle or Melee |
 | Zone | Zone speed, zone damage |
-| World | Loot amount, supply drop frequency (or off), bounty on/off |
+| World | Loot amount, supply drop frequency (or off), bounty on/off, word scavenge on/off |
 
 ## 🔊 Voice lines
 
