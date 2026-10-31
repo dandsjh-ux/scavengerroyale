@@ -14,35 +14,67 @@ export function unlockAudio() {
   if (ctx.state === 'suspended') ctx.resume();
 }
 
-function noise(dur, freq, q, vol, type = 'lowpass', sweepTo = 0) {
+// ---------- 3D-ish positioning ----------
+// Sounds from the world fade with distance (silent past their range), get muffled the further away
+// they are, and are panned toward where they came from.
+const lis = { x: 0, y: 0, z: 0, yaw: 0 };
+export function setListener(x, y, z, yaw) { lis.x = x; lis.y = y; lis.z = z; lis.yaw = yaw; }
+
+// Returns how a sound at position p (array or {x,y,z}) should be heard, or null if it's out of earshot.
+export function at(p, range) {
+  const px = p.x ?? p[0], py = p.y ?? p[1], pz = p.z ?? p[2];
+  const dx = px - lis.x, dy = py - lis.y, dz = pz - lis.z;
+  const d = Math.hypot(dx, dy, dz);
+  if (d >= range) return null;
+  const near = 1 - d / range;
+  const rx = Math.cos(lis.yaw), rz = -Math.sin(lis.yaw); // listener's right-hand direction
+  const pan = d > 0.5 ? Math.max(-1, Math.min(1, (dx * rx + dz * rz) / Math.hypot(dx, dz || 1e-6))) * 0.8 : 0;
+  return { vol: near * near, cut: 300 + 17700 * near * near * near, pan };
+}
+
+// Turns a volume (number, for your own sounds) or an at() result into a gain + output node.
+function route(sp) {
+  if (!ctx || sp == null) return null;
+  if (typeof sp === 'number') return sp > 0.01 ? { g: sp, out: master } : null;
+  if (sp.vol < 0.01) return null;
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = sp.cut;
+  let tail = lp;
+  if (ctx.createStereoPanner) { const pn = ctx.createStereoPanner(); pn.pan.value = sp.pan; lp.connect(pn); tail = pn; }
+  tail.connect(master);
+  setTimeout(() => { try { tail.disconnect(); } catch { /* already gone */ } }, 2500);
+  return { g: sp.vol, out: lp };
+}
+
+function noise(dur, freq, q, vol, type = 'lowpass', sweepTo = 0, out = master) {
   if (!ctx) return;
   const t = ctx.currentTime;
   const src = ctx.createBufferSource(); src.buffer = noiseBuf;
   const f = ctx.createBiquadFilter(); f.type = type; f.frequency.setValueAtTime(freq, t); f.Q.value = q;
   if (sweepTo) f.frequency.exponentialRampToValueAtTime(sweepTo, t + dur);
   const g = ctx.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  src.connect(f); f.connect(g); g.connect(master);
+  src.connect(f); f.connect(g); g.connect(out);
   src.start(t); src.stop(t + dur);
 }
 
-function tone(freq, dur, vol, type = 'sine', toFreq = 0, delay = 0) {
+function tone(freq, dur, vol, type = 'sine', toFreq = 0, delay = 0, out = master) {
   if (!ctx) return;
   const t = ctx.currentTime + delay;
   const o = ctx.createOscillator(); o.type = type; o.frequency.setValueAtTime(freq, t);
   if (toFreq) o.frequency.exponentialRampToValueAtTime(toFreq, t + dur);
   const g = ctx.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  o.connect(g); g.connect(master);
+  o.connect(g); g.connect(out);
   o.start(t); o.stop(t + dur);
 }
 
-// vol 0..1 based on distance
-export function sfxShot(cls, vol = 1) {
-  if (vol < 0.02) return;
-  if (cls === 'sniper') { noise(0.5, 1800, 0.7, 0.9 * vol, 'lowpass', 200); tone(90, 0.35, 0.6 * vol, 'sine', 40); }
-  else { noise(0.12, 3000, 0.8, 0.45 * vol, 'lowpass', 600); tone(180, 0.08, 0.2 * vol, 'square', 70); }
+// The sounds below take either a plain volume (your own actions) or SFX.at(position, range).
+export function sfxShot(cls, sp = 1) {
+  const r = route(sp); if (!r) return;
+  if (cls === 'sniper') { noise(0.5, 1800, 0.7, 0.9 * r.g, 'lowpass', 200, r.out); tone(90, 0.35, 0.6 * r.g, 'sine', 40, 0, r.out); }
+  else { noise(0.12, 3000, 0.8, 0.45 * r.g, 'lowpass', 600, r.out); tone(180, 0.08, 0.2 * r.g, 'square', 70, 0, r.out); }
 }
-export function sfxSwing(vol = 1, pitch = 1) { if (vol > 0.02) noise(0.18 / pitch, 900 * pitch, 2, 0.35 * vol, 'bandpass', 3500 * pitch); }
-export function sfxSlam(vol = 1) { noise(0.5, 500, 0.8, 0.8 * vol, 'lowpass', 80); tone(110, 0.3, 0.5 * vol, 'sine', 45); }
+export function sfxSwing(sp = 1, pitch = 1) { const r = route(sp); if (r) noise(0.18 / pitch, 900 * pitch, 2, 0.35 * r.g, 'bandpass', 3500 * pitch, r.out); }
+export function sfxSlam(sp = 1) { const r = route(sp); if (!r) return; noise(0.5, 500, 0.8, 0.8 * r.g, 'lowpass', 80, r.out); tone(110, 0.3, 0.5 * r.g, 'sine', 45, 0, r.out); }
+export function sfxSiren(sp = 1) { const r = route(sp); if (!r) return; tone(660, 0.3, 0.25 * r.g, 'square', 440, 0, r.out); }
 export function sfxHit(head) { tone(head ? 1500 : 1100, 0.07, 0.25, 'triangle'); if (head) tone(1900, 0.08, 0.2, 'triangle', 0, 0.06); }
 export function sfxKill() { [660, 880, 1320].forEach((f, i) => tone(f, 0.15, 0.22, 'triangle', 0, i * 0.07)); }
 export function sfxHurt() { tone(160, 0.2, 0.4, 'sawtooth', 60); }
@@ -53,8 +85,8 @@ export function sfxDash() { noise(0.25, 400, 1, 0.3, 'bandpass', 2400); }
 export function sfxZoneTick() { tone(220, 0.12, 0.15, 'sine'); }
 export function sfxWin() { [523, 659, 784, 1046, 784, 1046].forEach((f, i) => tone(f, 0.2, 0.25, 'triangle', 0, i * 0.12)); }
 export function sfxStep(vol = 0.06) { noise(0.06, 500, 1, vol, 'lowpass'); }
-export function sfxBoom(vol = 1) { noise(1.1, 900, 0.6, 1.0 * vol, 'lowpass', 60); tone(70, 0.6, 0.8 * vol, 'sine', 30); }
-export function sfxThrow(vol = 1) { if (vol > 0.02) noise(0.2, 600, 1.5, 0.25 * vol, 'bandpass', 1800); }
+export function sfxBoom(sp = 1) { const r = route(sp); if (!r) return; noise(1.1, 900, 0.6, 1.0 * r.g, 'lowpass', 60, r.out); tone(70, 0.6, 0.8 * r.g, 'sine', 30, 0, r.out); }
+export function sfxThrow(sp = 1) { const r = route(sp); if (r) noise(0.2, 600, 1.5, 0.25 * r.g, 'bandpass', 1800, r.out); }
 export function sfxDrop() { [392, 523, 659, 784].forEach((f, i) => tone(f, 0.18, 0.18, 'square', 0, i * 0.09)); }
 
 // ---------- recorded voice lines ----------

@@ -44,6 +44,8 @@ const S = {
   streak: 0, rewards: {}, wallhackUntil: 0, strikes: [], strikeOpen: false, jetFuel: 0, lastJumpPress: -9,
   wordCat: null, wordEnds: 0, bag: [],
 };
+// How far away (metres) each kind of sound can still be heard. Past ~70% of the range it's faint and muffled.
+const HEAR = { rifle: 200, turret: 150, sniper: 340, swing: 30, slam: 60, throw: 40, smoke: 60, boom: 260, strike: 380, siren: 300 };
 const NADE_DT = 0.05; // grenades are stepped at the server's tick rate so client and server paths match
 const gScale = () => mut(S.mut).gravity || 1;
 
@@ -97,7 +99,7 @@ function onMessage(m) {
     case 'inv': S.nades = m.nades; S.maxNades = m.max; S.smokes = m.smokes || 0; break;
     case 'smoke':
       S.nadeSims.delete(m.id); R.removeNade(m.id); R.addSmoke(m.p, m.dur);
-      SFX.sfxSwing(Math.max(0, 1 - camPos().distanceTo(new THREE.Vector3(...m.p)) / 60), 0.4);
+      SFX.sfxSwing(SFX.at(m.p, HEAR.smoke), 0.4);
       break;
     case 'nullify': S.nullUntil = performance.now() / 1000 + m.time; flashCenter('🧿 Nullifier active!', `The zone can't hurt you for ${m.time} s`, 2); break;
     case 'nade': onNadeThrown(m); break;
@@ -445,15 +447,15 @@ function camPos() { return R.camera.position; }
 function onFx(m) {
   if (m.k === 'shot') {
     R.addTracer(m.o, m.e, m.c);
-    const d = camPos().distanceTo(new THREE.Vector3(...m.o));
-    SFX.sfxShot(m.c, Math.max(0, 1 - d / (m.c === 'sniper' ? 450 : 220)) ** 1.5);
+    SFX.sfxShot(m.c, SFX.at(m.o, HEAR[m.c] || HEAR.rifle));
     const a = R.avatars.get(m.id); if (a) a.swingT = 0;
   } else if (m.k === 'swing') {
     R.addSwing(m.id, m.v);
     const a = R.avatars.get(m.id);
     if (m.v === 'throw' && m.o && m.e) R.throwKnife(m.o, m.e);
-    if (m.v === 'slam' && a) { R.slamFx([a.pos.x, a.pos.y, a.pos.z]); SFX.sfxSlam(Math.max(0, 1 - a.pos.distanceTo(camPos()) / 40)); }
-    else if (a) SFX.sfxSwing(Math.max(0, 1 - a.pos.distanceTo(camPos()) / 30), m.v === 'finisher' ? 0.7 : m.v === 'backhand' ? 1.25 : 1);
+    if (m.v === 'slam' && a) { R.slamFx([a.pos.x, a.pos.y, a.pos.z]); SFX.sfxSlam(SFX.at(a.pos, HEAR.slam)); }
+    else if (a) SFX.sfxSwing(SFX.at(a.pos, HEAR.swing), m.v === 'finisher' ? 0.7 : m.v === 'backhand' ? 1.25 : 1);
+    else if (m.v === 'throw' && m.o) SFX.sfxThrow(SFX.at(m.o, HEAR.throw));
   }
 }
 
@@ -571,8 +573,7 @@ function onNadeThrown(m) {
   S.nadeSims.set(m.id, { g: { x: m.o[0], y: m.o[1], z: m.o[2], vx: m.v[0], vy: m.v[1], vz: m.v[2] }, prev: { x: m.o[0], y: m.o[1], z: m.o[2] }, acc: 0, t: GRENADE.fuse });
   R.addNade(m.id, m.k);
   if (m.owner !== S.myId) {
-    const d = camPos().distanceTo(new THREE.Vector3(...m.o));
-    SFX.sfxThrow(Math.max(0, 1 - d / 40));
+    SFX.sfxThrow(SFX.at(m.o, HEAR.throw));
   }
 }
 
@@ -580,8 +581,7 @@ function onBoom(m) {
   S.nadeSims.delete(m.id);
   R.removeNade(m.id);
   R.explode(m.p);
-  const d = camPos().distanceTo(new THREE.Vector3(...m.p));
-  SFX.sfxBoom(Math.max(0.05, 1 - d / 160));
+  SFX.sfxBoom(SFX.at(m.p, m.big ? HEAR.strike : HEAR.boom));
   // knockback for the local player
   const me = S.me;
   if (me && me.alive && !me.glide) {
@@ -1168,7 +1168,7 @@ function onStrike(m) {
   R.strikeMarker(m.x, m.z, secs);
   S.strikes.push({ x: m.x, z: m.z, until: performance.now() / 1000 + secs });
   banner(m.owner === S.myId ? '✈️ Airstrike inbound!' : '⚠️ AIRSTRIKE INCOMING! Get out of the red zone!');
-  [0, 0.35, 0.7, 1.05].forEach((d) => setTimeout(() => SFX.sfxZoneTick(), d * 1000));
+  [0, 0.35, 0.7, 1.05].forEach((d) => setTimeout(() => SFX.sfxSiren(SFX.at([m.x, 1, m.z], HEAR.siren)), d * 1000));
 }
 
 function toggleStreakMenu() {
@@ -1449,6 +1449,8 @@ function frame(t) {
   const showVm = !!vm && !S.me.glide && !(S.cls === 'sniper' && S.aimK > 0.85);
   if (vm) R.updateViewmodel(dt, vm.moving, S.aimK, vm.reloadK, showVm, vm.nadeAim);
   if (S.phase !== 'lobby') updateHud(dt);
+  R.camera.getWorldDirection(fwd);
+  SFX.setListener(R.camera.position.x, R.camera.position.y, R.camera.position.z, Math.atan2(-fwd.x, -fwd.z));
   R.render(dt, showVm);
 }
 
