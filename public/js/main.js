@@ -3,7 +3,7 @@ import {
   CLASSES, BODY_HEIGHT, CROUCH_HEIGHT, EYE_HEIGHT, CROUCH_EYE, GLIDE_FALL_SPEED, GLIDE_MOVE_SPEED, MAX_HP, MAX_SHIELD, MAP_HALF,
   SHOP_ITEMS, SPEED_UPGRADE, JUMP_UPGRADE, MAG_UPGRADE, RADAR_TIME, GRENADE, MUTATORS, mut, BOT_SKILL,
   KNIFE, SETTINGS, defaultSettings, allowedClasses, SHOP_NEEDS_ALIVE,
-  STREAKS, AIRSTRIKE, JETPACK, GRAVITY,
+  STREAKS, AIRSTRIKE, JETPACK, GRAVITY, WORD_CATEGORIES, wordPayout,
 } from '../shared/config.js';
 import { generateMap } from '../shared/map.js';
 import { World, stepBody, stepGrenade, raySphere, rayBox, lineOfSight } from '../shared/physics.js';
@@ -42,6 +42,7 @@ const S = {
   settings: defaultSettings(), locked: false, myKills: 0, respawnAt: 0, livesLeft: -1,
   combo: 0, comboLast: 0, lastSlam: 0, lastKnifeThrow: 0,
   streak: 0, rewards: {}, wallhackUntil: 0, strikes: [], strikeOpen: false, jetFuel: 0, lastJumpPress: -9,
+  wordCat: null, wordEnds: 0, bag: [],
 };
 const NADE_DT = 0.05; // grenades are stepped at the server's tick rate so client and server paths match
 const gScale = () => mut(S.mut).gravity || 1;
@@ -103,6 +104,11 @@ function onMessage(m) {
     case 'streak': onStreak(m); break;
     case 'streakOn': onStreakOn(m); break;
     case 'strike': onStrike(m); break;
+    case 'wround': onWordRound(m); break;
+    case 'wadd': R.addWords(m.words); if (m.from === S.myId) banner(`😱 Your ${m.words.length} word${m.words.length > 1 ? 's' : ''} spilled out!`); break;
+    case 'wtake': onWordTaken(m); break;
+    case 'wbag': S.bag = m.bag; break;
+    case 'wcash': flashCenter(`💰 Words cashed in!`, `${m.n} word${m.n > 1 ? 's' : ''} → ${m.pts} 🪙`, 2.5); SFX.sfxCash(); break;
     case 'lock':
       S.locked = true; closeShop();
       banner(`🔒 Final circles! ${S.settings.respawn === 'on' ? 'Respawns' : 'Eliminations are final'} and the shop are now closed`);
@@ -274,6 +280,7 @@ function onStart(m) {
   S.mut = m.mut || 'classic'; S.bountyId = null; S.marks.clear(); S.bloom = 0;
   S.locked = false; S.myKills = 0; S.respawnAt = 0; S.combo = 0; S.lastSlam = 0; S.lastKnifeThrow = 0;
   S.streak = 0; S.rewards = {}; S.wallhackUntil = 0; S.strikes = []; S.jetFuel = 0; closeStrikeMap();
+  S.wordCat = null; S.bag = [];
   const mu = mut(S.mut);
   $('mutPill').textContent = S.mut === 'classic' ? '' : `${mu.icon} ${mu.name}`;
   if (S.mut !== 'classic') setTimeout(() => banner(`${mu.icon} ${mu.name}: ${mu.desc}`), 4500);
@@ -403,6 +410,7 @@ function onRespawn(m) {
 // ------------------------------------------------------------------ snapshots & events
 function onSnap(m) {
   S.zone = m.z; S.aliveCount = m.a; S.bountyId = m.b ?? null; S.locked = !!m.lk;
+  if (m.wr) { S.wordCat = m.wr[0]; S.wordEnds = performance.now() / 1000 + m.wr[1]; } else S.wordCat = null;
   R.syncTurrets(m.tu, (id) => (S.info.get(id) || { color: '#999999' }).color);
   R.setZone(m.z);
   const seen = new Set();
@@ -837,11 +845,13 @@ function doShoot(now, moving) {
   }
   const [tBest, hitT] = rayTurrets(o, fwd, best);
   if (hitT != null) { best = tBest; hit = null; head = false; }
+  const [wBest, hitW] = rayWords(o, fwd, best);
+  if (hitW != null) { best = wBest; hit = null; head = false; }
   const end = o.clone().addScaledVector(fwd, best);
   const right = new THREE.Vector3(Math.cos(me.yaw), 0, -Math.sin(me.yaw));
   const muzzle = o.clone().addScaledVector(fwd, 0.8).addScaledVector(right, 0.18 * (1 - S.aimK)).add(new THREE.Vector3(0, -0.12, 0));
   const r2 = (v) => Math.round(v * 100) / 100;
-  send({ t: 'shot', o: [r2(muzzle.x), r2(muzzle.y), r2(muzzle.z)], e: [r2(end.x), r2(end.y), r2(end.z)], hit, head, hitT });
+  send({ t: 'shot', o: [r2(muzzle.x), r2(muzzle.y), r2(muzzle.z)], e: [r2(end.x), r2(end.y), r2(end.z)], hit, head, hitT: hitW != null ? null : hitT, hitW });
   R.addTracer(muzzle.toArray(), end.toArray(), S.cls);
   R.vmFire(S.cls);
   SFX.sfxShot(S.cls, 0.8);
@@ -889,7 +899,23 @@ function doMelee(now) {
     const p = t.root.position, d = Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z);
     if (d < bd && ((p.x - me.x) * fx + (p.z - me.z) * fz) / (Math.hypot(p.x - me.x, p.z - me.z) || 1) > 0.45) { hitT = id; best = null; bd = d; }
   }
-  send({ t: 'melee', hit: best, k: kind, hitT });
+  let hitW = null; // ...and so can words
+  for (const [id, w] of R.words) {
+    const p = w.position, d = Math.hypot(p.x - me.x, p.y - me.y - me.eye, p.z - me.z);
+    if (d < bd + 0.6 && ((p.x - me.x) * fx + (p.z - me.z) * fz) / (Math.hypot(p.x - me.x, p.z - me.z) || 1) > 0.45) { hitW = id; best = null; hitT = null; bd = d; }
+  }
+  send({ t: 'melee', hit: best, k: kind, hitT, hitW });
+}
+
+// Distance and id of the closest floating word along a ray (if nearer than `best`).
+function rayWords(o, d, best) {
+  let hitW = null;
+  for (const [id, w] of R.words) {
+    const p = w.position, hw = w.userData.halfW;
+    const t = rayBox(o.x, o.y, o.z, d.x, d.y, d.z, { x0: p.x - hw, y0: p.y - 0.38, z0: p.z - hw, x1: p.x + hw, y1: p.y + 0.38, z1: p.z + hw });
+    if (t >= 0 && t < best) { best = t; hitW = id; }
+  }
+  return [best, hitW];
 }
 
 // Distance and id of the closest enemy turret along a ray (if nearer than `best`).
@@ -919,10 +945,12 @@ function throwKnife(now) {
   }
   const [tBest, hitT] = rayTurrets(o, fwd, best);
   if (hitT != null) { best = tBest; hit = null; }
+  const [wBest, hitW] = rayWords(o, fwd, best);
+  if (hitW != null) { best = wBest; hit = null; }
   const r2 = (v) => Math.round(v * 100) / 100;
   const start = o.clone().addScaledVector(fwd, 0.6).add(new THREE.Vector3(0, -0.1, 0));
   const end = o.clone().addScaledVector(fwd, best);
-  send({ t: 'melee', k: 'throw', hit, hitT, o: start.toArray().map(r2), e: end.toArray().map(r2) });
+  send({ t: 'melee', k: 'throw', hit, hitT: hitW != null ? null : hitT, hitW, o: start.toArray().map(r2), e: end.toArray().map(r2) });
   R.throwKnife(start.toArray(), end.toArray());
   R.vmFire('melee', 'throw');
   SFX.sfxThrow(0.9);
@@ -991,7 +1019,7 @@ function onPoints(m) {
   S.points = m.pts;
   if (m.up) S.up = m.up;
   if (m.gain) {
-    const why = { kill: 'elimination', coin: 'coins', gem: 'gem', med: 'scavenged', shield: 'scavenged', nade: 'scavenged', bag: 'loot bag', drop: 'supply drop', bounty: 'BOUNTY' }[m.why] || '';
+    const why = { kill: 'elimination', coin: 'coins', gem: 'gem', med: 'scavenged', shield: 'scavenged', nade: 'scavenged', bag: 'loot bag', drop: 'supply drop', bounty: 'BOUNTY', words: 'words' }[m.why] || '';
     const pop = $('ptsPop');
     pop.textContent = `+${m.gain} 🪙 ${why}`;
     pop.className = ''; void pop.offsetWidth; pop.className = 'show';
@@ -1059,6 +1087,32 @@ function closeShop() {
 }
 $('shopClose').addEventListener('click', closeShop);
 window.addEventListener('keydown', (e) => { if (e.code === 'Escape') closeShop(); });
+
+// ------------------------------------------------------------------ word scavenge
+const catOf = (id) => WORD_CATEGORIES.find((c) => c.id === id);
+
+function onWordRound(m) {
+  S.wordCat = m.cat; S.wordEnds = performance.now() / 1000 + m.left; S.bag = m.bag || [];
+  R.setWords(m.words);
+  const c = catOf(m.cat);
+  if (m.fresh && c) {
+    banner(`${c.icon} New word hunt: ${c.name.toUpperCase()}! Shoot the ${c.name.toLowerCase()} words`);
+    SFX.sfxDrop();
+  }
+}
+
+function onWordTaken(m) {
+  const p = R.takeWord(m.id, m.good);
+  if (m.by !== S.myId) return;
+  const c = catOf(S.wordCat);
+  if (m.good) {
+    SFX.sfxWordGood();
+    if (p) showDmgNum(p, `✓ ${m.text}`, 'head');
+  } else {
+    SFX.sfxWordBad();
+    flashCenter(`✗ ${m.text}`, c ? `That's not in ${c.name}!` : '', 1.2);
+  }
+}
 
 // ------------------------------------------------------------------ kill streak rewards
 function onStreak(m) {
@@ -1259,6 +1313,25 @@ const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
 let hudCache = {};
 function setText(id, v) { if (hudCache[id] !== v) { hudCache[id] = v; $(id).textContent = v; } }
 
+function updateWordPanel() {
+  const c = S.wordCat ? catOf(S.wordCat) : null;
+  $('wordPanel').classList.toggle('hidden', !c);
+  if (!c) return;
+  const left = Math.max(0, Math.ceil(S.wordEnds - performance.now() / 1000));
+  setText('wpCat', `${c.icon} ${c.name}`);
+  setText('wpTime', fmt(left));
+  $('wpTime').classList.toggle('hurry', left <= 10);
+  const key = S.bag.join();
+  if (hudCache.wpBag !== key) {
+    hudCache.wpBag = key;
+    const shown = S.bag.slice(-10);
+    $('wpBag').innerHTML = S.bag.length ? (S.bag.length > shown.length ? `<i>+${S.bag.length - shown.length}</i>` : '') + shown.map((w) => `<span>${esc(w)}</span>`).join('')
+      : '<i>Shoot words that fit the category</i>';
+  }
+  const n = S.bag.length;
+  setText('wpWorth', n ? `${n} word${n > 1 ? 's' : ''} = ${wordPayout(n)} 🪙 · next one +${wordPayout(n + 1) - wordPayout(n)}` : `First word = ${wordPayout(1)} 🪙, then it grows fast!`);
+}
+
 function updateHud(dt) {
   setText('aliveCount', `👥 ${S.aliveCount} alive`);
   const me = S.me;
@@ -1317,6 +1390,7 @@ function updateHud(dt) {
     $('crosshair').style.display = 'none';
     if (centerT <= 0) $('centerMsg').innerHTML = '';
   }
+  updateWordPanel();
   centerT -= dt;
   drawMinimap();
   drawStrikeMap();

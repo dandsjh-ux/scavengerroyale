@@ -70,7 +70,7 @@
         <div class="help-grid">
           <div><b>Keyboard + mouse</b><br>WASD move · Mouse look · Left click shoot/stab · Right click aim / scope (Melee: dash) · Space jump (Melee: double jump) · Shift sprint · C / Ctrl crouch · R reload · E dash (Melee) · <b>hold G</b> aim grenade, release to throw · <b>Knife:</b> chain 3 slashes for a finisher, attack right after a dash to lunge, attack while falling to ground-slam, F throws the knife · B shop · Tab scoreboard</div>
           <div><b>Tablet</b><br>Left thumb: move stick (push fully to sprint) · Right thumb: drag to look · Hold FIRE (drag it to aim while shooting) · AIM/DASH, JUMP, CROUCH, RELOAD buttons · hold 💣 to aim a grenade (drag to adjust), release to throw</div>
-          <div><b>Goal</b><br>Skydive in, scavenge medkits <span class="ico med"></span>, shields <span class="ico sh"></span>, coins and gems inside buildings, spend 🪙 in the shop (B / 🛒), stay inside the shrinking zone and be the last one standing! Grab 📦 supply drops, pick up 💰 loot bags from the fallen, and hunt the 👑 bounty (the kill leader) for bonus points.</div>
+          <div><b>Goal</b><br>Skydive in, scavenge medkits <span class="ico med"></span>, shields <span class="ico sh"></span>, coins and gems inside buildings, spend 🪙 in the shop (B / 🛒), stay inside the shrinking zone and be the last one standing! <b>Word scavenge:</b> every minute a new category appears (e.g. Animals). Shoot the floating words that belong to it (DOG, CAT, ZEBRA…) and avoid the distractors. The more you collect, the more they're worth when the minute ends, but if you're knocked out first, your words spill out for others to grab! Grab 📦 supply drops, pick up 💰 loot bags from the fallen, and hunt the 👑 bounty (the kill leader) for bonus points.</div>
         </div>
       </details>
     </div>
@@ -98,7 +98,12 @@
       <div class="bar shield"><div id="shieldFill"></div><span id="shieldText">0</span></div>
       <div class="bar hp"><div id="hpFill"></div><span id="hpText">100</span></div>
     </div>
-    <div id="streakBar"></div>
+    <div id="wordPanel" class="hidden">
+      <div class="wp-head"><span id="wpCat"></span><span id="wpTime"></span></div>
+      <div id="wpBag"></div>
+      <div id="wpWorth"></div>
+    </div>
+        <div id="streakBar"></div>
     <div id="weaponBox">
       <div id="weaponName">Rifle</div>
       <div id="ammo">30 / ∞</div>

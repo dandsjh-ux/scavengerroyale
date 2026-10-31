@@ -223,3 +223,14 @@ body.touch #streakBar { bottom: 74px; left: 50%; transform: translateX(-50%); }
 .strike-card h2 { margin: 0 0 8px; }
 #strikeCanvas { width: min(560px, 80vw, 70vh); height: min(560px, 80vw, 70vh); border-radius: 12px; cursor: crosshair; touch-action: none; }
 #jetFuel { font-size: 13px; color: #4cc9f0; }
+
+/* ---------- v5: word scavenge ---------- */
+#wordPanel { position: absolute; left: 16px; top: 12px; width: 250px; background: rgba(20,15,50,.7); border: 2px solid rgba(255,214,10,.8); border-radius: 14px; padding: 8px 12px; font-size: 13px; }
+.wp-head { display: flex; justify-content: space-between; align-items: center; font-size: 18px; font-weight: 900; color: #ffd60a; }
+#wpTime { font-size: 15px; color: #fff; background: rgba(255,255,255,.15); padding: 1px 8px; border-radius: 8px; }
+#wpTime.hurry { background: #ff4d6d; }
+#wpBag { margin: 6px 0 4px; display: flex; flex-wrap: wrap; gap: 4px; min-height: 20px; }
+#wpBag span { background: #3ddc97; color: #10301f; font-weight: bold; padding: 1px 7px; border-radius: 8px; font-size: 12px; }
+#wpBag i { opacity: .7; }
+#wpWorth { font-weight: bold; }
+body.touch #wordPanel { top: 150px; width: 210px; }

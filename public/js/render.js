@@ -69,6 +69,7 @@ export class Renderer {
     this.nadeMeshes = new Map();
     this.projectiles = [];
     this.turrets = new Map();
+    this.words = new Map();
     this.wallhack = false;
     this.time = 0;
     this.shake = 0;
@@ -427,6 +428,33 @@ export class Renderer {
     }
   }
 
+  // ------------------------------------------------------------- word scavenge
+  setWords(list) { this.clearWords(); this.addWords(list); }
+  clearWords() { for (const w of this.words.values()) this.disposeWord(w); this.words.clear(); }
+  addWords(list) {
+    for (const [id, text, x, y, z] of list || []) {
+      const s = makeWordSprite(text);
+      s.position.set(x, y, z);
+      s.userData.baseY = y;
+      s.userData.halfW = s.scale.x / 2;
+      this.scene.add(s);
+      this.words.set(id, s);
+    }
+  }
+  disposeWord(s) { this.scene.remove(s); s.material.map.dispose(); s.material.dispose(); }
+  takeWord(id, good) {
+    const s = this.words.get(id);
+    if (!s) return null;
+    this.words.delete(id);
+    const p = s.position.clone();
+    this.disposeWord(s);
+    this.burst(p, good ? ['#3ddc97', '#ffd60a', '#ffffff'] : ['#ff4d6d', '#888888'], good ? 24 : 12, good ? 5 : 3, 0.8, 0.2, 6);
+    return p;
+  }
+  updateWords() {
+    for (const s of this.words.values()) s.position.y = s.userData.baseY + Math.sin(this.time * 2 + s.position.x * 0.7) * 0.15;
+  }
+
   // ------------------------------------------------------------- kill streak turrets / airstrikes
   syncTurrets(list, colors) {
     const seen = new Set();
@@ -671,6 +699,7 @@ export class Renderer {
   clearEffects() {
     for (const e of [...this.effects, ...this.particles]) { this.scene.remove(e.obj); e.obj.traverse((o) => { if (o.geometry) { o.geometry.dispose(); o.material.dispose(); } }); }
     this.clearTurrets();
+    this.clearWords();
     for (const P of this.projectiles) this.scene.remove(P.obj);
     this.effects = []; this.particles = []; this.projectiles = [];
   }
@@ -778,6 +807,7 @@ export class Renderer {
     this.updateAvatars(dt);
     this.updateEffects(dt);
     this.updatePickups(dt);
+    this.updateWords();
     this.zoneMat.uniforms.time.value = this.time;
     this.waterMat.uniforms.time.value = this.time;
     this.clouds.rotation.y += dt * 0.004;
@@ -1135,4 +1165,29 @@ function makeTurret(color) {
   ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04;
   root.add(ring);
   return { root, head, light, hp: 0 };
+}
+
+const WORD_COLORS = ['#ff4d6d', '#3a86ff', '#3ddc97', '#ff9e00', '#b388ff', '#f15bb5', '#00b4d8', '#e76f51'];
+// A floating word label (sprite, always faces the camera).
+function makeWordSprite(text) {
+  const c = document.createElement('canvas');
+  const g = c.getContext('2d');
+  const font = 'bold 72px Trebuchet MS, Arial, sans-serif';
+  g.font = font;
+  const tw = Math.ceil(g.measureText(text).width);
+  c.width = tw + 60; c.height = 112;
+  g.font = font;
+  const col = WORD_COLORS[(text.charCodeAt(0) + text.length) % WORD_COLORS.length];
+  g.fillStyle = 'rgba(255,255,255,0.95)';
+  roundRect(g, 4, 4, c.width - 8, c.height - 8, 30); g.fill();
+  g.lineWidth = 8; g.strokeStyle = col; g.stroke();
+  g.fillStyle = col; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, c.width / 2, c.height / 2 + 4);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  const h = 0.62;
+  s.scale.set(h * c.width / c.height, h, 1);
+  return s;
 }

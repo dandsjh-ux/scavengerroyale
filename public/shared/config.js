@@ -223,6 +223,31 @@ export const SETTINGS = [
   { key: 'loot', group: 'World', label: 'Loot amount', def: 140, options: [[80, 'Low'], [140, 'Normal'], [220, 'High']] },
   { key: 'drops', group: 'World', label: 'Supply drops', def: 75, options: [[0, 'Off'], [45, 'Every 45 s'], [75, 'Every 75 s'], [120, 'Every 2 min']] },
   { key: 'bounty', group: 'World', label: 'Bounty on kill leader', def: 'on', options: ONOFF },
+  { key: 'words', group: 'World', label: 'Word scavenge', def: 'on', options: ONOFF },
 ];
 export const defaultSettings = () => Object.fromEntries(SETTINGS.map((s) => [s.key, s.def]));
 export const allowedClasses = (set) => Object.keys(CLASSES).filter((c) => set[c] !== 'off');
+
+// ---------- word scavenge ----------
+// Every minute a new category is announced. Shoot (or stab) words that belong to it to collect them;
+// they cash in for points when the minute ends. Words from other categories are scattered as distractors.
+export const WORD_CATEGORIES = [
+  { id: 'animals', name: 'Animals', icon: '🐾', words: ['DOG', 'CAT', 'ZEBRA', 'LION', 'TIGER', 'HORSE', 'RABBIT', 'MONKEY', 'ELEPHANT', 'GIRAFFE', 'BEAR', 'SHEEP', 'GOAT', 'DUCK', 'FROG', 'MOUSE', 'COW', 'PIG'] },
+  { id: 'fruits', name: 'Fruits', icon: '🍎', words: ['APPLE', 'BANANA', 'ORANGE', 'GRAPE', 'MANGO', 'PEAR', 'LEMON', 'CHERRY', 'PEACH', 'PLUM', 'KIWI', 'MELON', 'PAPAYA', 'COCONUT', 'LIME', 'BERRY'] },
+  { id: 'colours', name: 'Colours', icon: '🎨', words: ['RED', 'BLUE', 'GREEN', 'YELLOW', 'PINK', 'PURPLE', 'BLACK', 'WHITE', 'BROWN', 'GREY', 'GOLD', 'SILVER', 'VIOLET', 'NAVY', 'CREAM'] },
+  { id: 'body', name: 'Body Parts', icon: '🖐️', words: ['HAND', 'FOOT', 'NOSE', 'EAR', 'EYE', 'MOUTH', 'ARM', 'LEG', 'KNEE', 'TOE', 'FINGER', 'HEAD', 'NECK', 'CHIN', 'ELBOW', 'TOOTH'] },
+  { id: 'transport', name: 'Transport', icon: '🚗', words: ['CAR', 'BUS', 'TRAIN', 'PLANE', 'BOAT', 'SHIP', 'BIKE', 'TRUCK', 'TAXI', 'VAN', 'SCOOTER', 'ROCKET', 'TRAM', 'HELICOPTER', 'SUBMARINE'] },
+  { id: 'food', name: 'Food', icon: '🍕', words: ['BREAD', 'RICE', 'PIZZA', 'CAKE', 'SOUP', 'EGG', 'CHEESE', 'NOODLES', 'PASTA', 'COOKIE', 'BURGER', 'SALAD', 'TOAST', 'BUTTER', 'HONEY', 'PIE'] },
+  { id: 'weather', name: 'Weather', icon: '🌦️', words: ['RAIN', 'SNOW', 'SUN', 'WIND', 'CLOUD', 'STORM', 'FOG', 'HAIL', 'THUNDER', 'RAINBOW', 'SUNNY', 'WINDY', 'CLOUDY', 'FROST', 'BREEZE'] },
+  { id: 'clothes', name: 'Clothes', icon: '👕', words: ['SHIRT', 'DRESS', 'HAT', 'SOCK', 'SHOE', 'COAT', 'SKIRT', 'JACKET', 'SCARF', 'GLOVE', 'BOOT', 'SHORTS', 'JEANS', 'CAP', 'SWEATER'] },
+  { id: 'school', name: 'School Things', icon: '✏️', words: ['PENCIL', 'BOOK', 'RULER', 'ERASER', 'DESK', 'CHAIR', 'BAG', 'CRAYON', 'PAPER', 'GLUE', 'SCISSORS', 'NOTEBOOK', 'MARKER', 'TEACHER', 'BOARD'] },
+  { id: 'family', name: 'Family', icon: '👨‍👩‍👧', words: ['MOTHER', 'FATHER', 'SISTER', 'BROTHER', 'BABY', 'AUNT', 'UNCLE', 'COUSIN', 'GRANDMA', 'GRANDPA', 'SON', 'DAUGHTER', 'MUM', 'DAD', 'NIECE'] },
+];
+export const WORDS = {
+  roundTime: 60,      // seconds per category
+  targets: 26,        // words of the current category scattered each round
+  distractors: 26,    // words from other categories (worth nothing)
+  base: 25,           // payout grows exponentially: base * (growth^n - 1) / (growth - 1)
+  growth: 1.4,
+};
+export const wordPayout = (n) => (n > 0 ? Math.round(WORDS.base * (Math.pow(WORDS.growth, n) - 1) / (WORDS.growth - 1)) : 0);

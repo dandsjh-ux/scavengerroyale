@@ -45,6 +45,7 @@ export function generateMap(seed) {
   const flats = [];      // render-only ground decals {x0,z0,x1,z1,y,c}
   const trees = [];      // {x,z,h,r,c}
   const pickupSpots = []; // [x,y,z]
+  const roofSpots = [];   // [x,y,z] on top of buildings (word scavenge)
   const buildings = [];  // footprints for the minimap
   let spawnSpots = [];
 
@@ -204,6 +205,7 @@ export function generateMap(seed) {
     box(x0, totalH, z0 + T, x0 + T, totalH + P, z1 - T, trim);
     box(x1 - T, totalH, z0 + T, x1, totalH + P, z1 - T, trim);
     if (floors >= 3) pickupSpots.push([x0 + w * 0.7, totalH, z0 + d * 0.7]);
+    roofSpots.push([x0 + w * 0.65, totalH, z0 + d * 0.35]);
   }
 
   function slabWithHole(x0, z0, x1, z1, y0, y1, lane, sx, run, c) {
@@ -237,6 +239,7 @@ export function generateMap(seed) {
     box(x0 - 0.25, H, z0 - 0.25, x1 + 0.25, H + 0.3, z1 + 0.25, roof);
     if (rnd() < 0.6) { const c = pick(CRATE_COLORS), cx = x0 + T + 0.9, cz = z0 + T + 0.9; box(cx - 0.6, 0, cz - 0.6, cx + 0.6, 1.1, cz + 0.6, c); }
     if (rnd() < 0.7) pickupSpots.push([x0 + w * 0.62, 0.05, z0 + d * 0.62]);
+    roofSpots.push([x0 + w / 2, H + 0.3, z0 + d / 2]);
   }
 
   // Scatter sheds over a rectangle, skipping anything in `keepOut` ([x0,z0,x1,z1] rects, grown by a margin).
@@ -368,7 +371,7 @@ export function generateMap(seed) {
   // spawn spots must be clear of every box
   spawnSpots = spawnSpots.filter(([x, z]) => !boxes.some((b) => x > b.x0 - 1 && x < b.x1 + 1 && z > b.z0 - 1 && z < b.z1 + 1 && b.y0 < 2));
 
-  return { seed, half, boxes, flats, trees, pickupSpots, spawnSpots, buildings };
+  return { seed, half, boxes, flats, trees, pickupSpots, roofSpots, spawnSpots, buildings };
 }
 
 function lighten(c) {

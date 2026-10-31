@@ -15,7 +15,7 @@ import {
   MEDKIT_HEAL, SHIELD_GAIN, DROP_HEIGHT, EYE_HEIGHT, BODY_HEIGHT, computeDamage, MAP_HALF,
   POINTS, SHOP_ITEMS, DMG_UPGRADE, GRENADE, MUTATORS, mut, BOT_SKILL, DROP_FALL_SPEED,
   KNIFE, RESPAWN_DROP_HEIGHT, SHOP_NEEDS_ALIVE, SETTINGS, defaultSettings, allowedClasses,
-  STREAKS, TURRET, AIRSTRIKE, JETPACK,
+  STREAKS, TURRET, AIRSTRIKE, JETPACK, WORD_CATEGORIES, WORDS, wordPayout,
 } from './public/shared/config.js';
 import { generateMap } from './public/shared/map.js';
 import { World, stepBody, stepGrenade, lineOfSight } from './public/shared/physics.js';
@@ -132,6 +132,10 @@ const game = {
   bountyId: null,
   turrets: [],
   strikes: [],
+  words: [],          // word scavenge: words currently floating in the world
+  wordRound: null,    // { cat, endsAt }
+  catOrder: [],
+  nextWordId: 1,
   nextTurretId: 1,
 };
 const session = new Map();   // name -> { name, wins, kills, games } for this server run
@@ -181,7 +185,7 @@ function makePlayer(fields) {
     hp: MAX_HP, shield: 0, alive: false, inMatch: false, kills: 0, place: 0,
     lastShot: 0, joinedAt: Date.now(), points: 0, up: newUpgrades(), nades: 0, lastNade: 0, scope: 0,
     lastSlam: 0, lastKnifeThrow: 0, respawnAt: null, livesUsed: 0,
-    streak: 0, rewards: newRewards(), jetFuel: 0, jet: 0,
+    streak: 0, rewards: newRewards(), jetFuel: 0, jet: 0, bag: [],
     stats: newStats(), ...fields,
   };
 }
@@ -277,6 +281,7 @@ function onConnection(ws, addr) {
       send(me, { t: 'welcome', id: me.id, addresses: lanAddresses(), port: actualPort });
       if (game.phase !== 'lobby') {
         send(me, { t: 'start', seed: game.seed, spectator: true, mut: game.mut, pickups: game.pickups.map(pickupWire) });
+        sendWordRound(me);
       }
       broadcast(lobbyState());
       return;
@@ -325,9 +330,11 @@ function reconnect(p, ws, addr) {
       respawnIn: p.respawnAt != null ? Math.max(0, r2(p.respawnAt - game.time)) : 0, lives: livesLeft, place: p.place,
       streak: p.streak, rewards: p.rewards, jetFuel: p.jetFuel,
     });
+    sendWordRound(p);
     broadcast({ t: 'dc', id: p.id, on: 0 }, p);
   } else if (game.phase === 'playing') {
     send(p, { t: 'start', seed: game.seed, spectator: true, mut: game.mut, pickups: game.pickups.map(pickupWire) });
+    sendWordRound(p);
   }
   broadcast(lobbyState());
 }
@@ -400,6 +407,7 @@ function onShot(p, m) {
   p.lastShot = now;
   if (Array.isArray(m.o) && Array.isArray(m.e)) broadcast({ t: 'fx', k: 'shot', id: p.id, c: p.cls, o: m.o, e: m.e }, p);
   if (m.hitT != null) { damageTurret(m.hitT, computeDamage(p.cls, 20, false, false) * dmgMult(p), p); return; }
+  if (m.hitW != null) { collectWord(p, m.hitW, w.range + 6); return; }
   if (m.hit == null) return;
   const v = players.get(m.hit);
   if (!v || v === p || !v.inMatch || !v.alive) return;
@@ -425,6 +433,7 @@ function onMelee(p, m) {
   broadcast(fx, p);
   if (kind === 'slam') { knifeSlam(p, dmgMult(p)); return; }
   if (m.hitT != null) { damageTurret(m.hitT, (kind === 'throw' ? KNIFE.throw.damage : CLASSES.melee.weapon.damage) * dmgMult(p), p); return; }
+  if (m.hitW != null) { collectWord(p, m.hitW, kind === 'throw' ? KNIFE.throw.range + 6 : KNIFE.lungeRange + 3); return; }
   if (m.hit == null) return;
   const v = players.get(m.hit);
   if (!v || v === p || !v.inMatch || !v.alive) return;
@@ -515,6 +524,90 @@ function blast(x, y, z, owner, o) {
   for (const t of [...game.turrets]) {
     const d = Math.hypot(t.x - x, t.y + 0.7 - y, t.z - z);
     if (d < R && (!owner || t.owner !== owner.id)) damageTurret(t.id, o.max + (o.min - o.max) * (d / R), owner);
+  }
+}
+
+// ------------------------------------------------------------------ word scavenge
+const shuffled = (a) => { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
+const wordWire = (w) => [w.id, w.text, r2(w.x), r2(w.y), r2(w.z)]; // whether a word counts is never sent: you have to know!
+const HOVER = 1.4; // words float this high above the surface
+
+function sendWordRound(p) {
+  if (!game.wordRound) return;
+  send(p, { t: 'wround', cat: game.wordRound.cat, left: Math.max(0, r2(game.wordRound.endsAt - game.time)), words: game.words.map(wordWire), bag: p.bag || [] });
+}
+
+// Floating spots inside the current safe zone: on the ground, inside buildings and on rooftops.
+function wordSpots(n) {
+  const z = game.zone, map = game.map, w = game.world;
+  const inZone = (x, zz) => Math.hypot(x - z.cx, zz - z.cz) < Math.max(12, Math.min(z.r, MAP_HALF * 1.2) * 0.9) && Math.abs(x) < MAP_HALF - 4 && Math.abs(zz) < MAP_HALF - 4;
+  const indoor = shuffled(map.pickupSpots.filter((s) => inZone(s[0], s[2])));
+  const roofs = shuffled(map.roofSpots.filter((s) => inZone(s[0], s[2])));
+  const ground = [];
+  for (let k = 0; k < n * 4 && ground.length < n; k++) {
+    const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * Math.min(z.r, MAP_HALF * 1.2) * 0.9;
+    const x = z.cx + Math.cos(a) * d, zz = z.cz + Math.sin(a) * d;
+    if (!inZone(x, zz) || w.anyOverlap(x - 0.6, 0, zz - 0.6, x + 0.6, 2.6, zz + 0.6)) continue;
+    ground.push([x, 0, zz]);
+  }
+  const out = [], take = (list, k) => { while (k-- > 0 && list.length) out.push(list.pop()); };
+  take(indoor, Math.round(n * 0.4)); take(roofs, Math.round(n * 0.2)); take(ground, n - out.length);
+  take(indoor, n - out.length); take(roofs, n - out.length); // top up if one kind ran short
+  return shuffled(out).map(([x, y, zz]) => [x, y + HOVER, zz]);
+}
+
+function startWordRound() {
+  if (!game.catOrder.length) game.catOrder = shuffled(WORD_CATEGORIES.map((c) => c.id));
+  const nextId = game.catOrder.shift();
+  const cat = WORD_CATEGORIES.find((c) => c.id === nextId);
+  game.wordRound = { cat: cat.id, endsAt: game.time + WORDS.roundTime };
+  const spots = wordSpots(WORDS.targets + WORDS.distractors);
+  const nGood = Math.min(WORDS.targets, Math.ceil(spots.length / 2));
+  let good = [], bad = [];
+  const others = WORD_CATEGORIES.filter((c) => c !== cat).flatMap((c) => c.words);
+  game.words = spots.map(([x, y, z], i) => {
+    if (i < nGood) { if (!good.length) good = shuffled(cat.words); return { id: game.nextWordId++, text: good.pop(), good: true, x, y, z }; }
+    if (!bad.length) bad = shuffled(others);
+    return { id: game.nextWordId++, text: bad.pop(), good: false, x, y, z };
+  });
+  for (const p of players.values()) p.bag = [];
+  broadcast({ t: 'wround', cat: cat.id, left: WORDS.roundTime, words: game.words.map(wordWire), bag: [], fresh: 1 });
+}
+
+function collectWord(p, id, reach) {
+  const i = game.words.findIndex((w) => w.id === id);
+  if (i < 0 || !game.wordRound) return;
+  const w = game.words[i];
+  if (Math.hypot(w.x - p.x, w.y - p.y, w.z - p.z) > reach) return;
+  game.words.splice(i, 1);
+  if (w.good) { p.bag.push(w.text); send(p, { t: 'wbag', bag: p.bag, worth: wordPayout(p.bag.length) }); }
+  broadcast({ t: 'wtake', id, by: p.id, good: w.good ? 1 : 0, text: w.text });
+}
+
+// Killed before cashing in: their words spill out around them for anyone to grab.
+function scatterBag(v) {
+  if (!v.bag || !v.bag.length || !game.wordRound) { if (v.bag) v.bag = []; return; }
+  const added = v.bag.map((text) => {
+    const a = Math.random() * Math.PI * 2, d = 1.5 + Math.random() * 5;
+    let x = v.x + Math.cos(a) * d, z = v.z + Math.sin(a) * d;
+    if (game.world.anyOverlap(x - 0.3, v.y + 0.5, z - 0.3, x + 0.3, v.y + 2.5, z + 0.3)) { x = v.x; z = v.z; } // keep out of walls
+    const top = v.y + 1.5;
+    const y = Math.max(0, top - game.world.raycast(x, top, z, 0, -1, 0, 200)) + HOVER;
+    return { id: game.nextWordId++, text, good: true, x, y, z };
+  });
+  game.words.push(...added);
+  broadcast({ t: 'wadd', words: added.map(wordWire), from: v.id });
+  v.bag = [];
+  send(v, { t: 'wbag', bag: [], worth: 0, lost: added.length });
+}
+
+function cashInWords() {
+  for (const p of players.values()) {
+    if (!p.inMatch || !p.alive || !p.bag.length) { p.bag = []; continue; }
+    const n = p.bag.length, pts = wordPayout(n);
+    givePoints(p, pts, 'words');
+    send(p, { t: 'wcash', n, pts });
+    p.bag = [];
   }
 }
 
@@ -634,6 +727,7 @@ function killPlayer(v, killer, weapon, head = false) {
   else { v.respawnAt = null; v.place = remaining().length + 1; }
   const wasBounty = game.bountyId === v.id;
   v.streak = 0; v.jetFuel = 0; v.jet = 0;
+  scatterBag(v);
   if (!v.isBot) sendStreak(v);
   if (killer && killer !== v) {
     killer.kills++;
@@ -739,7 +833,7 @@ function startMatch() {
     p.inMatch = true; p.alive = true; p.hp = MAX_HP; p.shield = startShield(p); p.kills = 0; p.place = 0; p.lastShot = 0;
     p.points = 0; p.up = newUpgrades(); p.stats = newStats(); p.scope = 0; p.lastNade = 0; p.nadeAcc = 0;
     p.respawnAt = null; p.livesUsed = 0; p.lastSlam = 0; p.lastKnifeThrow = 0;
-    p.streak = 0; p.rewards = newRewards(); p.jetFuel = 0; p.jet = 0;
+    p.streak = 0; p.rewards = newRewards(); p.jetFuel = 0; p.jet = 0; p.bag = [];
     p.nades = startNades(p);
     if (!p.isBot) sessionEntry(p).games++;
     if (p.isBot) {
@@ -761,6 +855,7 @@ function startMatch() {
   game.nextPickupId = game.pickups.length;
   game.nades = [];
   game.turrets = []; game.strikes = [];
+  game.words = []; game.wordRound = null; game.catOrder = [];
   game.bountyId = null;
   game.nextDropAt = SET().drops ? 50 : Infinity;
   game.locked = false;
@@ -777,6 +872,7 @@ function startMatch() {
     send(p, { t: 'pts', pts: 0, up: p.up, gain: 0 });
     sendInv(p);
   }
+  if (SET().words !== 'off') startWordRound();
   broadcast(lobbyState());
 }
 
@@ -989,6 +1085,7 @@ setInterval(() => {
     updateNades(dt);
     updateTurrets(dt);
     updateStrikes(dt);
+    if (game.wordRound && game.time >= game.wordRound.endsAt) { cashInWords(); startWordRound(); }
     if (game.time >= game.nextDropAt && game.zone.stage !== 'closed') { spawnSupplyDrop(); game.nextDropAt = game.time + SET().drops; }
     if (isLocked() && !game.locked) { game.locked = true; broadcast({ t: 'lock' }); }
     for (const p of inMatch()) {
@@ -1048,6 +1145,7 @@ setInterval(() => {
       t: 's',
       z: game.zone ? zoneInfo() : null,
       lk: game.locked ? 1 : 0,
+      wr: game.wordRound ? [game.wordRound.cat, Math.max(0, Math.ceil(game.wordRound.endsAt - game.time))] : null,
       tu: game.turrets.map((t) => [t.id, r2(t.x), r2(t.y), r2(t.z), r2(t.yaw), Math.ceil(t.hp), t.owner]),
       a: aliveList().length,
       b: game.bountyId,

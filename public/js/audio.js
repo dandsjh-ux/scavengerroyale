@@ -82,3 +82,6 @@ export async function playVoice(url) {
   voiceSrc.connect(voiceGain);
   voiceSrc.start();
 }
+export function sfxWordGood() { [784, 1047, 1319].forEach((f, i) => tone(f, 0.1, 0.2, 'triangle', 0, i * 0.05)); }
+export function sfxWordBad() { tone(180, 0.25, 0.3, 'square', 120); }
+export function sfxCash() { [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.14, 0.22, 'triangle', 0, i * 0.07)); }
