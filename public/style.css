@@ -234,3 +234,8 @@ body.touch #streakBar { bottom: 74px; left: 50%; transform: translateX(-50%); }
 #wpBag i { opacity: .7; }
 #wpWorth { font-weight: bold; }
 body.touch #wordPanel { top: 150px; width: 210px; }
+
+/* ---------- v6: smoke, nullifier ---------- */
+#smokeCount { font-size: 14px; font-weight: bold; color: #dfe6ee; }
+#tSmoke { top: 368px; right: 20px; width: 48px; height: 48px; font-size: 20px; background: rgba(200, 210, 225, .6); }
+#nullBadge { position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); background: rgba(76, 201, 240, .85); color: #08243a; font-weight: 900; padding: 4px 14px; border-radius: 14px; }

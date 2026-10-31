@@ -15,7 +15,7 @@ import {
   MEDKIT_HEAL, SHIELD_GAIN, DROP_HEIGHT, EYE_HEIGHT, BODY_HEIGHT, computeDamage, MAP_HALF,
   POINTS, SHOP_ITEMS, DMG_UPGRADE, GRENADE, MUTATORS, mut, BOT_SKILL, DROP_FALL_SPEED,
   KNIFE, RESPAWN_DROP_HEIGHT, SHOP_NEEDS_ALIVE, SETTINGS, defaultSettings, allowedClasses,
-  STREAKS, TURRET, AIRSTRIKE, JETPACK, WORD_CATEGORIES, WORDS, wordPayout,
+  STREAKS, TURRET, AIRSTRIKE, JETPACK, WORD_CATEGORIES, WORDS, wordPayout, NULLIFIER_TIME, SMOKE,
 } from './public/shared/config.js';
 import { generateMap } from './public/shared/map.js';
 import { World, stepBody, stepGrenade, lineOfSight } from './public/shared/physics.js';
@@ -132,6 +132,7 @@ const game = {
   bountyId: null,
   turrets: [],
   strikes: [],
+  smokes: [],         // active smoke clouds {x,y,z,until}
   words: [],          // word scavenge: words currently floating in the world
   wordRound: null,    // { cat, endsAt }
   catOrder: [],
@@ -185,12 +186,12 @@ function makePlayer(fields) {
     hp: MAX_HP, shield: 0, alive: false, inMatch: false, kills: 0, place: 0,
     lastShot: 0, joinedAt: Date.now(), points: 0, up: newUpgrades(), nades: 0, lastNade: 0, scope: 0,
     lastSlam: 0, lastKnifeThrow: 0, respawnAt: null, livesUsed: 0,
-    streak: 0, rewards: newRewards(), jetFuel: 0, jet: 0, bag: [],
+    streak: 0, rewards: newRewards(), jetFuel: 0, jet: 0, bag: [], smokes: 0, nullUntil: 0,
     stats: newStats(), ...fields,
   };
 }
 
-function newUpgrades() { return { dmg: 0, speed: 0, jump: 0, mag: 0 }; }
+function newUpgrades() { return { dmg: 0, speed: 0, jump: 0, mag: 0, nullify: 0 }; }
 function newRewards() { return Object.fromEntries(STREAKS.map((k) => [k.id, 0])); }
 function sendStreak(p, unlocked = null) { send(p, { t: 'streak', n: p.streak, rewards: p.rewards, unlocked }); }
 function newStats() { return { dmg: 0, longest: 0, earned: 0, nadeKills: 0 }; }
@@ -214,7 +215,7 @@ function givePoints(p, n, why) {
   send(p, { t: 'pts', pts: p.points, up: p.up, gain: n, why });
 }
 
-function sendInv(p) { send(p, { t: 'inv', nades: p.nades, max: maxNades(p) }); }
+function sendInv(p) { send(p, { t: 'inv', nades: p.nades, max: maxNades(p), smokes: p.smokes }); }
 
 function onBuy(p, id) {
   const item = SHOP_ITEMS.find((i) => i.id === id);
@@ -230,6 +231,7 @@ function onBuy(p, id) {
   if ((id === 'shield' || id === 'bigshield') && p.shield >= MAX_SHIELD) return fail('Shield is already full');
   if (id === 'nade' && p.nades >= maxNades(p)) return fail(`You can only carry ${maxNades(p)} grenades`);
   if (id === 'jetpack' && p.jetFuel >= JETPACK.fuel - 1) return fail('Your jetpack tank is already full');
+  if (id === 'smoke' && p.smokes >= SMOKE.max) return fail(`You can only carry ${SMOKE.max} smoke grenades`);
   const cost = itemCost(item);
   if (p.points < cost) return fail(`Need ${cost - p.points} more points`);
   p.points -= cost;
@@ -238,6 +240,8 @@ function onBuy(p, id) {
   else if (id === 'bigshield') p.shield = MAX_SHIELD;
   else if (id === 'nade') { p.nades++; sendInv(p); }
   else if (id === 'jetpack') p.jetFuel = JETPACK.fuel;
+  else if (id === 'smoke') { p.smokes++; sendInv(p); }
+  else if (id === 'nullify') { p.up.nullify = (p.up.nullify || 0) + 1; p.nullUntil = game.time + NULLIFIER_TIME; send(p, { t: 'nullify', time: NULLIFIER_TIME }); }
   else if (item.max) p.up[id] = (p.up[id] || 0) + 1;
   send(p, { t: 'pts', pts: p.points, up: p.up, gain: 0, bought: id });
 }
@@ -328,7 +332,8 @@ function reconnect(p, ws, addr) {
       pos: [r2(p.x), r2(p.y), r2(p.z)], yaw: p.yaw, glide: p.glide, alive: p.alive, hp: Math.ceil(p.hp), shield: Math.ceil(p.shield),
       kills: p.kills, pts: p.points, up: p.up, nades: p.nades, maxNades: maxNades(p), lk: game.locked ? 1 : 0,
       respawnIn: p.respawnAt != null ? Math.max(0, r2(p.respawnAt - game.time)) : 0, lives: livesLeft, place: p.place,
-      streak: p.streak, rewards: p.rewards, jetFuel: p.jetFuel,
+      streak: p.streak, rewards: p.rewards, jetFuel: p.jetFuel, smokes: p.smokes,
+      nullIn: Math.max(0, r2(p.nullUntil - game.time)),
     });
     sendWordRound(p);
     broadcast({ t: 'dc', id: p.id, on: 0 }, p);
@@ -474,30 +479,49 @@ function lifesteal(p) {
 
 // ------------------------------------------------------------------ grenades
 function onNade(p, m) {
-  if (!p.inMatch || !p.alive || p.glide || p.nades <= 0) return;
+  const smoke = m.k === 'smoke';
+  if (!p.inMatch || !p.alive || p.glide || (smoke ? p.smokes <= 0 : p.nades <= 0)) return;
   if (game.time - p.lastNade < GRENADE.cooldown * 0.8) return;
   if (!Array.isArray(m.o) || !Array.isArray(m.v)) return;
   let o = m.o.map((n) => +n || 0), v = m.v.map((n) => +n || 0);
   if (Math.hypot(o[0] - p.x, o[1] - p.y - EYE_HEIGHT, o[2] - p.z) > 3) o = [p.x, p.y + EYE_HEIGHT, p.z];
   const sp = Math.hypot(v[0], v[1], v[2]), maxSp = GRENADE.speed + GRENADE.lift + 14;
   if (sp > maxSp) v = v.map((n) => n * maxSp / sp);
-  p.nades--; p.lastNade = game.time;
+  if (smoke) p.smokes--; else p.nades--;
+  p.lastNade = game.time;
   sendInv(p);
-  throwNade(p, o, v);
+  throwNade(p, o, v, smoke ? 'smoke' : 'nade');
 }
 
-function throwNade(p, o, v) {
-  const g = { id: game.nextNadeId++, owner: p.id, x: o[0], y: o[1], z: o[2], vx: v[0], vy: v[1], vz: v[2], t: GRENADE.fuse };
+function throwNade(p, o, v, k = 'nade') {
+  const g = { id: game.nextNadeId++, owner: p.id, k, x: o[0], y: o[1], z: o[2], vx: v[0], vy: v[1], vz: v[2], t: k === 'smoke' ? SMOKE.fuse : GRENADE.fuse };
   game.nades.push(g);
-  broadcast({ t: 'nade', id: g.id, owner: p.id, o, v });
+  broadcast({ t: 'nade', id: g.id, owner: p.id, o, v, k });
 }
+
+// Smoke clouds block line of sight for bots and turrets (players just can't see through them).
+function smokeBlocks(ax, ay, az, bx, by, bz) {
+  for (const sm of game.smokes) {
+    const dx = bx - ax, dy = by - ay, dz = bz - az, L2 = dx * dx + dy * dy + dz * dz || 1;
+    const t = Math.max(0, Math.min(1, ((sm.x - ax) * dx + (sm.y - ay) * dy + (sm.z - az) * dz) / L2));
+    if (Math.hypot(ax + dx * t - sm.x, ay + dy * t - sm.y, az + dz * t - sm.z) < SMOKE.radius) return true;
+  }
+  return false;
+}
+const canSee = (ax, ay, az, bx, by, bz) => lineOfSight(game.world, ax, ay, az, bx, by, bz) && !smokeBlocks(ax, ay, az, bx, by, bz);
 
 function updateNades(dt) {
   for (let i = game.nades.length - 1; i >= 0; i--) {
     const g = game.nades[i];
     stepGrenade(game.world, g, dt, M().gravity || 1);
     g.t -= dt;
-    if (g.t <= 0) { game.nades.splice(i, 1); explode(g); }
+    if (g.t <= 0) {
+      game.nades.splice(i, 1);
+      if (g.k === 'smoke') {
+        game.smokes.push({ x: g.x, y: g.y + 1.2, z: g.z, until: game.time + SMOKE.duration });
+        broadcast({ t: 'smoke', id: g.id, p: [r2(g.x), r2(g.y), r2(g.z)], dur: SMOKE.duration });
+      } else explode(g);
+    }
   }
 }
 
@@ -561,8 +585,9 @@ function startWordRound() {
   const nextId = game.catOrder.shift();
   const cat = WORD_CATEGORIES.find((c) => c.id === nextId);
   game.wordRound = { cat: cat.id, endsAt: game.time + WORDS.roundTime };
-  const spots = wordSpots(WORDS.targets + WORDS.distractors);
-  const nGood = Math.min(WORDS.targets, Math.ceil(spots.length / 2));
+  const dens = SET().wordDensity || 1;
+  const spots = wordSpots(Math.round((WORDS.targets + WORDS.distractors) * dens));
+  const nGood = Math.min(Math.round(WORDS.targets * dens), Math.ceil(spots.length / 2));
   let good = [], bad = [];
   const others = WORD_CATEGORIES.filter((c) => c !== cat).flatMap((c) => c.words);
   game.words = spots.map(([x, y, z], i) => {
@@ -580,7 +605,7 @@ function collectWord(p, id, reach) {
   const w = game.words[i];
   if (Math.hypot(w.x - p.x, w.y - p.y, w.z - p.z) > reach) return;
   game.words.splice(i, 1);
-  if (w.good) { p.bag.push(w.text); send(p, { t: 'wbag', bag: p.bag, worth: wordPayout(p.bag.length) }); }
+  if (w.good) { p.bag.push(w.text); send(p, { t: 'wbag', bag: p.bag, worth: wordPayout(p.bag.length, p.cls) }); }
   broadcast({ t: 'wtake', id, by: p.id, good: w.good ? 1 : 0, text: w.text });
 }
 
@@ -604,7 +629,7 @@ function scatterBag(v) {
 function cashInWords() {
   for (const p of players.values()) {
     if (!p.inMatch || !p.alive || !p.bag.length) { p.bag = []; continue; }
-    const n = p.bag.length, pts = wordPayout(n);
+    const n = p.bag.length, pts = wordPayout(n, p.cls);
     givePoints(p, pts, 'words');
     send(p, { t: 'wcash', n, pts });
     p.bag = [];
@@ -653,7 +678,7 @@ function updateTurrets(dt) {
       for (const v of aliveList()) {
         if (v.id === t.owner || v.glide) continue;
         const d = Math.hypot(v.x - t.x, v.y - t.y, v.z - t.z);
-        if (d > bd || !lineOfSight(game.world, t.x, t.y + 1.2, t.z, v.x, v.y + 1.2, v.z)) continue;
+        if (d > bd || !canSee(t.x, t.y + 1.2, t.z, v.x, v.y + 1.2, v.z)) continue;
         best = v; bd = d;
       }
       t.target = best ? best.id : null;
@@ -833,7 +858,7 @@ function startMatch() {
     p.inMatch = true; p.alive = true; p.hp = MAX_HP; p.shield = startShield(p); p.kills = 0; p.place = 0; p.lastShot = 0;
     p.points = 0; p.up = newUpgrades(); p.stats = newStats(); p.scope = 0; p.lastNade = 0; p.nadeAcc = 0;
     p.respawnAt = null; p.livesUsed = 0; p.lastSlam = 0; p.lastKnifeThrow = 0;
-    p.streak = 0; p.rewards = newRewards(); p.jetFuel = 0; p.jet = 0; p.bag = [];
+    p.streak = 0; p.rewards = newRewards(); p.jetFuel = 0; p.jet = 0; p.bag = []; p.smokes = 0; p.nullUntil = 0;
     p.nades = startNades(p);
     if (!p.isBot) sessionEntry(p).games++;
     if (p.isBot) {
@@ -855,7 +880,7 @@ function startMatch() {
   game.nextPickupId = game.pickups.length;
   game.nades = [];
   game.turrets = []; game.strikes = [];
-  game.words = []; game.wordRound = null; game.catOrder = [];
+  game.words = []; game.wordRound = null; game.catOrder = []; game.smokes = [];
   game.bountyId = null;
   game.nextDropAt = SET().drops ? 50 : Infinity;
   game.locked = false;
@@ -975,7 +1000,7 @@ function updateBot(b, dt) {
       if (o === b || !o.inMatch || !o.alive || o.glide) continue;
       const d = Math.hypot(o.x - b.x, o.z - b.z);
       if (d > bd) continue;
-      if (!lineOfSight(w, b.x, b.y + EYE_HEIGHT, b.z, o.x, o.y + 1.3, o.z)) continue;
+      if (!canSee(b.x, b.y + EYE_HEIGHT, b.z, o.x, o.y + 1.3, o.z)) continue;
       best = o; bd = d;
     }
     if (best && ai.target !== best.id) ai.react = (0.7 + Math.random() * 0.6) * BOT_SKILL[game.botSkill].react;
@@ -1063,7 +1088,7 @@ function updateBot(b, dt) {
     return;
   }
   if (d3 > wp.range) return;
-  if (!lineOfSight(w, b.x, b.y + EYE_HEIGHT, b.z, t.x, t.y + 1.3, t.z)) { ai.target = null; return; }
+  if (!canSee(b.x, b.y + EYE_HEIGHT, b.z, t.x, t.y + 1.3, t.z)) { ai.target = null; return; }
   b.lastShot = game.time;
   // snipers are clumsy up close (no time to scope), rifles lose accuracy with range
   const chance = (b.cls === 'sniper' ? (d3 < 20 ? 0.22 : 0.5 - d3 / 700) : 0.42 - d3 / 260) * skill.aim;
@@ -1085,6 +1110,7 @@ setInterval(() => {
     updateNades(dt);
     updateTurrets(dt);
     updateStrikes(dt);
+    game.smokes = game.smokes.filter((sm) => sm.until > game.time);
     if (game.wordRound && game.time >= game.wordRound.endsAt) { cashInWords(); startWordRound(); }
     if (game.time >= game.nextDropAt && game.zone.stage !== 'closed') { spawnSupplyDrop(); game.nextDropAt = game.time + SET().drops; }
     if (isLocked() && !game.locked) { game.locked = true; broadcast({ t: 'lock' }); }
@@ -1110,7 +1136,7 @@ setInterval(() => {
         if (p.nadeAcc >= M().nadeRefill) { p.nadeAcc = 0; p.nades++; sendInv(p); }
       }
       // zone damage
-      if (Math.hypot(p.x - z.cx, p.z - z.cz) > z.r && !p.glide) {
+      if (Math.hypot(p.x - z.cx, p.z - z.cz) > z.r && !p.glide && !(p.nullUntil > game.time)) {
         p.zoneAcc = (p.zoneAcc || 0) + dps * dt;
         if (p.zoneAcc >= 1) {
           const a = Math.floor(p.zoneAcc); p.zoneAcc -= a;

@@ -33,6 +33,9 @@ export class Input {
         if (e.code === 'KeyB') this.pressed.add('shop');
         if (e.code === 'KeyG') this.nadeHeld = true;
         if (e.code === 'KeyF') this.pressed.add('knifeThrow');
+        if (e.code === 'KeyV') this.pressed.add('smokeThrow');
+        if (e.code === 'Minus') this.pressed.add('buy11');
+        if (e.code === 'Equal') this.pressed.add('buy12');
         if (/^Digit[0-9]$/.test(e.code)) this.pressed.add('buy' + (e.code === 'Digit0' ? '10' : e.code.slice(5)));
       }
       this.keys.add(e.code);
@@ -136,6 +139,7 @@ export class Input {
     tap('tShop', () => this.pressed.add('shop'));
     tap('tKnife', () => this.pressed.add('knifeThrow'));
     tap('tStreak', () => this.pressed.add('streakMenu'));
+    tap('tSmoke', () => this.pressed.add('smokeThrow'));
   }
 
   setAimButton(label, toggleable) {

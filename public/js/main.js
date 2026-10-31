@@ -3,7 +3,7 @@ import {
   CLASSES, BODY_HEIGHT, CROUCH_HEIGHT, EYE_HEIGHT, CROUCH_EYE, GLIDE_FALL_SPEED, GLIDE_MOVE_SPEED, MAX_HP, MAX_SHIELD, MAP_HALF,
   SHOP_ITEMS, SPEED_UPGRADE, JUMP_UPGRADE, MAG_UPGRADE, RADAR_TIME, GRENADE, MUTATORS, mut, BOT_SKILL,
   KNIFE, SETTINGS, defaultSettings, allowedClasses, SHOP_NEEDS_ALIVE,
-  STREAKS, AIRSTRIKE, JETPACK, GRAVITY, WORD_CATEGORIES, wordPayout,
+  STREAKS, AIRSTRIKE, JETPACK, GRAVITY, WORD_CATEGORIES, wordPayout, WORDS, NULLIFIER_TIME, SMOKE,
 } from '../shared/config.js';
 import { generateMap } from '../shared/map.js';
 import { World, stepBody, stepGrenade, raySphere, rayBox, lineOfSight } from '../shared/physics.js';
@@ -94,7 +94,12 @@ function onMessage(m) {
     case 'end': onEnd(m); break;
     case 'pts': onPoints(m); break;
     case 'shopfail': $('shopMsg').textContent = m.msg; break;
-    case 'inv': S.nades = m.nades; S.maxNades = m.max; break;
+    case 'inv': S.nades = m.nades; S.maxNades = m.max; S.smokes = m.smokes || 0; break;
+    case 'smoke':
+      S.nadeSims.delete(m.id); R.removeNade(m.id); R.addSmoke(m.p, m.dur);
+      SFX.sfxSwing(Math.max(0, 1 - camPos().distanceTo(new THREE.Vector3(...m.p)) / 60), 0.4);
+      break;
+    case 'nullify': S.nullUntil = performance.now() / 1000 + m.time; flashCenter('🧿 Nullifier active!', `The zone can't hurt you for ${m.time} s`, 2); break;
     case 'nade': onNadeThrown(m); break;
     case 'boom': onBoom(m); break;
     case 'pkadd': R.addPickups(m.list); break;
@@ -137,7 +142,8 @@ function buildClassCards() {
     el.style.setProperty('--c', c.color);
     const bar = (label, v) => `<div class="stat"><span>${label}</span><i><b style="width:${v * 20}%"></b></i></div>`;
     el.innerHTML = `<h3>${c.name}</h3><p>${c.desc}</p>${bar('Speed', c.stats.speed)}${bar('Range', c.stats.range)}${bar('Damage', c.stats.damage)}` +
-      `<div class="passive">★ ${c.passive}</div><div class="nades">💣 Grenades: start ${c.grenades.start}, carry up to ${c.grenades.max}</div>`;
+      `<div class="passive">★ ${c.passive}</div><div class="nades">💣 Grenades: start ${c.grenades.start}, carry up to ${c.grenades.max}</div>` +
+      `<div class="nades">🔤 Word cash-ins ×${WORDS.classMult[key] ?? 1}${(WORDS.classMult[key] ?? 1) > 1 ? ' (hardest to get close)' : (WORDS.classMult[key] ?? 1) < 1 ? ' (easiest from afar)' : ''}</div>`;
     el.dataset.cls = key;
     el.onclick = () => {
       if (!allowedClasses(S.settings).includes(key)) return;
@@ -280,7 +286,7 @@ function onStart(m) {
   S.mut = m.mut || 'classic'; S.bountyId = null; S.marks.clear(); S.bloom = 0;
   S.locked = false; S.myKills = 0; S.respawnAt = 0; S.combo = 0; S.lastSlam = 0; S.lastKnifeThrow = 0;
   S.streak = 0; S.rewards = {}; S.wallhackUntil = 0; S.strikes = []; S.jetFuel = 0; closeStrikeMap();
-  S.wordCat = null; S.bag = [];
+  S.wordCat = null; S.bag = []; S.smokes = 0; S.nullUntil = 0;
   const mu = mut(S.mut);
   $('mutPill').textContent = S.mut === 'classic' ? '' : `${mu.icon} ${mu.name}`;
   if (S.mut !== 'classic') setTimeout(() => banner(`${mu.icon} ${mu.name}: ${mu.desc}`), 4500);
@@ -359,6 +365,7 @@ function onResume(m) {
   if (CLASSES[m.cls]) S.cls = m.cls;
   S.points = m.pts; S.up = m.up; S.locked = !!m.lk; S.myKills = m.kills; S.livesLeft = m.lives;
   S.streak = m.streak || 0; S.rewards = m.rewards || {}; S.jetFuel = m.jetFuel || 0;
+  S.smokes = m.smokes || 0; S.nullUntil = performance.now() / 1000 + (m.nullIn || 0);
   ['lobby', 'endScreen'].forEach((id) => $(id).classList.add('hidden'));
   $('hud').classList.remove('hidden');
   if (m.alive) {
@@ -562,7 +569,7 @@ function onBounty(m) {
 // ------------------------------------------------------------------ grenades
 function onNadeThrown(m) {
   S.nadeSims.set(m.id, { g: { x: m.o[0], y: m.o[1], z: m.o[2], vx: m.v[0], vy: m.v[1], vz: m.v[2] }, prev: { x: m.o[0], y: m.o[1], z: m.o[2] }, acc: 0, t: GRENADE.fuse });
-  R.addNade(m.id);
+  R.addNade(m.id, m.k);
   if (m.owner !== S.myId) {
     const d = camPos().distanceTo(new THREE.Vector3(...m.o));
     SFX.sfxThrow(Math.max(0, 1 - d / 40));
@@ -758,6 +765,15 @@ function updateLocal(dt) {
   // grenades: hold to aim (arc preview), release to throw
   const canNade = !me.glide && !S.shopOpen;
   if (input.nadeHeld && canNade && S.nades > 0) predictArc(); else R.setArc(null);
+  if (input.take('smokeThrow') && canNade) {
+    if (S.smokes <= 0) flashCenter('No smoke grenades', 'Buy them in the shop (🌫️)', 1.2);
+    else if (now - S.lastThrow >= GRENADE.cooldown) {
+      S.lastThrow = now; S.smokes--;
+      const { o, v } = nadeLaunch();
+      send({ t: 'nade', o, v, k: 'smoke' });
+      SFX.sfxThrow(0.8);
+    }
+  }
   if (input.take('nadeThrow') && canNade) {
     if (S.nades <= 0) flashCenter('No grenades', 'Find 💣 loot or buy them in the shop', 1.2);
     else if (now - S.lastThrow >= GRENADE.cooldown) {
@@ -1055,7 +1071,7 @@ function renderShop() {
     const b = document.createElement('button');
     b.className = 'shop-item';
     b.disabled = maxed || blocked || needsAlive || S.points < cost;
-    b.innerHTML = `<span class="key">${touch ? '' : (i + 1) % 10}</span>${it.max ? `<span class="lvl">${lvl}/${it.max}</span>` : ''}` +
+    b.innerHTML = `<span class="key">${touch ? '' : ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '='][i] || ''}</span>${it.max ? `<span class="lvl">${lvl}/${it.max}</span>` : ''}` +
       `<div class="ic">${it.icon}</div><div class="nm">${it.name}</div><div class="ds">${blocked ? 'Not available' : needsAlive ? 'Buy after you respawn' : it.desc}</div>` +
       `<div class="cost">${maxed ? 'MAXED' : `🪙 ${cost}`}</div>`;
     b.addEventListener('click', () => buy(it.id));
@@ -1329,7 +1345,9 @@ function updateWordPanel() {
       : '<i>Shoot words that fit the category</i>';
   }
   const n = S.bag.length;
-  setText('wpWorth', n ? `${n} word${n > 1 ? 's' : ''} = ${wordPayout(n)} 🪙 · next one +${wordPayout(n + 1) - wordPayout(n)}` : `First word = ${wordPayout(1)} 🪙, then it grows fast!`);
+  const cm = WORDS.classMult[S.cls] ?? 1, cls = S.cls;
+  const tag = cm > 1 ? ` (${CLASSES[cls].name} ×${cm})` : cm < 1 ? ` (${CLASSES[cls].name} ×${cm})` : '';
+  setText('wpWorth', n ? `${n} word${n > 1 ? 's' : ''} = ${wordPayout(n, cls)} 🪙 · next +${wordPayout(n + 1, cls) - wordPayout(n, cls)}${tag}` : `First word = ${wordPayout(1, cls)} 🪙, then it grows fast!${tag}`);
 }
 
 function updateHud(dt) {
@@ -1357,6 +1375,11 @@ function updateHud(dt) {
       setText('ability', `${me.dashCd > 0 ? `Dash ${me.dashCd.toFixed(1)}s` : `Dash ✓${touch ? '' : ' [E]'}`} · ${thr > 0 ? `Throw ${thr.toFixed(1)}s` : `Throw ✓${touch ? '' : ' [F]'}`}${S.combo > 0 && now - S.comboLast < KNIFE.comboWindow ? ` · Combo ${S.combo + 1}/3` : ''}`);
     } else setText('ability', '');
     setText('nadeCount', S.maxNades ? `💣 ${S.nades} / ${S.maxNades}${touch ? '' : '  [G]'}` : '');
+    setText('smokeCount', S.smokes > 0 ? `🌫️ ${S.smokes} / ${SMOKE.max}${touch ? '' : '  [V]'}` : '');
+    $('tSmoke').classList.toggle('hidden', !(S.smokes > 0));
+    const nullLeft = S.nullUntil - performance.now() / 1000;
+    $('nullBadge').classList.toggle('hidden', !(nullLeft > 0 && me.alive));
+    if (nullLeft > 0) setText('nullBadge', `🧿 Zone immune ${Math.ceil(nullLeft)} s`);
     $('tShop').classList.toggle('hidden', !shopAvailable());
     setText('jetFuel', S.jetFuel > 0 ? `🚀 ${Math.ceil(S.jetFuel)} s fuel${me.jet ? ' · flying' : touch ? ' · double-tap JUMP' : ' · double-tap Space'}` : '');
     // kill streak bar: current streak + rewards ready to use
@@ -1371,7 +1394,7 @@ function updateHud(dt) {
     const xray = performance.now() / 1000 < S.wallhackUntil;
     if (xray) setText('ability', `👁️ X-Ray ${Math.ceil(S.wallhackUntil - performance.now() / 1000)} s`);
     $('nadeCount').classList.toggle('empty', S.nades <= 0);
-    const outside = z && me.alive && !me.glide && Math.hypot(me.x - z.cx, me.z - z.cz) > z.r;
+    const outside = z && me.alive && !me.glide && Math.hypot(me.x - z.cx, me.z - z.cz) > z.r && !(S.nullUntil > performance.now() / 1000);
     $('zoneVignette').classList.toggle('on', !!outside);
     if (outside) {
       S.zoneTickT -= dt;

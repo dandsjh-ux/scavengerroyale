@@ -122,7 +122,11 @@ export const SHOP_ITEMS = [
   { id: 'radar', name: 'Radar Ping', icon: '📡', desc: 'All enemies on your minimap for 12 s', cost: 120 },
   { id: 'nade', name: 'Grenade', icon: '💣', desc: '+1 grenade (up to your class max)', cost: 50 },
   { id: 'jetpack', name: 'Jetpack', icon: '🚀', desc: '30 s of flight. Double-tap jump to fly, jump again to land', cost: 500 },
+  { id: 'nullify', name: 'Nullifier', icon: '🧿', desc: '10 s immune to the zone (max 3 per match)', cost: 150, max: 3 },
+  { id: 'smoke', name: 'Smoke Grenade', icon: '🌫️', desc: 'Throw (V) for a 10 s smoke screen. Carry up to 3', cost: 70 },
 ];
+export const NULLIFIER_TIME = 10;
+export const SMOKE = { max: 3, fuse: 1.2, duration: 10, radius: 4.5, puffs: 9 };
 export const DMG_UPGRADE = 0.2, SPEED_UPGRADE = 0.12, JUMP_UPGRADE = 0.3, MAG_UPGRADE = 0.5;
 export const RADAR_TIME = 12;
 
@@ -177,7 +181,7 @@ export const KNIFE = {
 // ---------- respawns ----------
 export const RESPAWN_DROP_HEIGHT = 70;
 // Shop items that only make sense while you're alive (upgrades can be bought while waiting to respawn).
-export const SHOP_NEEDS_ALIVE = ['med', 'shield', 'bigshield', 'nade', 'radar', 'jetpack'];
+export const SHOP_NEEDS_ALIVE = ['med', 'shield', 'bigshield', 'nade', 'radar', 'jetpack', 'nullify', 'smoke'];
 
 // ---------- jetpack (shop) ----------
 export const JETPACK = {
@@ -224,6 +228,7 @@ export const SETTINGS = [
   { key: 'drops', group: 'World', label: 'Supply drops', def: 75, options: [[0, 'Off'], [45, 'Every 45 s'], [75, 'Every 75 s'], [120, 'Every 2 min']] },
   { key: 'bounty', group: 'World', label: 'Bounty on kill leader', def: 'on', options: ONOFF },
   { key: 'words', group: 'World', label: 'Word scavenge', def: 'on', options: ONOFF },
+  { key: 'wordDensity', group: 'World', label: 'Word density', def: 1, options: [[0.5, 'Low'], [1, 'Normal'], [3, 'High (×3)']] },
 ];
 export const defaultSettings = () => Object.fromEntries(SETTINGS.map((s) => [s.key, s.def]));
 export const allowedClasses = (set) => Object.keys(CLASSES).filter((c) => set[c] !== 'off');
@@ -249,5 +254,7 @@ export const WORDS = {
   distractors: 26,    // words from other categories (worth nothing)
   base: 25,           // payout grows exponentially: base * (growth^n - 1) / (growth - 1)
   growth: 1.4,
+  // Harder to scavenge up close with a scope, easiest to sprint around and stab: rewards reflect that.
+  classMult: { sniper: 0.6, rifle: 1, melee: 1.5 },
 };
-export const wordPayout = (n) => (n > 0 ? Math.round(WORDS.base * (Math.pow(WORDS.growth, n) - 1) / (WORDS.growth - 1)) : 0);
+export const wordPayout = (n, cls = 'rifle') => (n > 0 ? Math.round(WORDS.base * (Math.pow(WORDS.growth, n) - 1) / (WORDS.growth - 1) * (WORDS.classMult[cls] ?? 1)) : 0);

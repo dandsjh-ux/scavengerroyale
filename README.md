@@ -12,7 +12,8 @@ A bright, colourful first-person **battle royale** for up to **8 players on your
 - **Loot bags 💰**: eliminated players drop a bag worth some of their points, plus a grenade if they had one.
 - **Word scavenge 🔤**: every minute a new category is announced, for example *Animals*. Words float around the safe zone, on the ground, inside buildings and on rooftops.
   - **Collect:** shoot or stab the words that belong to the category (DOG, CAT, ZEBRA…). Distractor words from other categories earn nothing.
-  - **Cash-in:** when the minute ends, your words pay out **exponentially**: 1 word is worth 25, 3 words 109, 5 words 274, and 10 words 1,745 points.
+  - **Cash-in:** when the minute ends, your words pay out **exponentially**: 1 word is worth 25, 3 words 109, 5 words 274, and 10 words 1,745 points (Rifle rates). Class matters: **Sniper ×0.6** (easiest from afar), **Rifle ×1**, **Melee ×1.5** (you have to get up close).
+  - **Density:** the host can set word density to Low (½), Normal (52 words a round) or High (×3, 156 words).
   - **Knocked out before the cash-in:** your words spill out around you for anyone to grab.
   - **Categories:** Animals, Fruits, Colours, Body Parts, Transport, Food, Weather, Clothes, School Things and Family, about 15 primary-level words each. Edit them in `WORD_CATEGORIES` in [`public/shared/config.js`](public/shared/config.js).
 - - **Kill streak rewards 🔥**: these are earned by getting kills in a row without dying. Use them with the number keys **1–4**, or the ⭐ menu on a tablet:
@@ -32,7 +33,7 @@ A bright, colourful first-person **battle royale** for up to **8 players on your
   - 🎯 **Headhunters**: bigger headshots
 - **Time of day**: each map has its own look (Sunny Noon, Golden Hour, Candy Sunset or Fresh Morning), with a gradient sky, sun, animated water and drifting clouds.
 - **End-of-match awards** (Damage Dealer, Longest Shot, Scavenger King, Demolition) and a **session leaderboard** of wins and kills in the lobby.
-- **Points & shop 🛒**: you earn points from **kills (+100)** and from **scavenging** (coins +20, gems +50, any other loot +10). Spend them in the shop at any time (**B** key, or the 🛒 button on a tablet), even while waiting to respawn (upgrades only). The shop **closes in the final two circles**. It sells medkits, shield cells, Mega Shield, grenades, a jetpack, Power Core (+20% damage), Turbo Shoes (+12% speed), Spring Boots (+30% jump), Extended Mag (+50% magazine) and Radar Ping (shows every enemy on your minimap for 12 s). Points and upgrades reset each match. The server checks every purchase.
+- **Points & shop 🛒**: you earn points from **kills (+100)** and from **scavenging** (coins +20, gems +50, any other loot +10). Spend them in the shop at any time (**B** key, or the 🛒 button on a tablet), even while waiting to respawn (upgrades only). The shop **closes in the final two circles**. It sells medkits, shield cells, Mega Shield, grenades, a jetpack, a **🧿 Nullifier** (150: 10 s immune to the zone, max 3 per match), **🌫️ smoke grenades** (70: press **V** to throw a 10 s low-poly smoke screen that also blinds bots and turrets; carry up to 3), Power Core (+20% damage), Turbo Shoes (+12% speed), Spring Boots (+30% jump), Extended Mag (+50% magazine) and Radar Ping (shows every enemy on your minimap for 12 s). Points and upgrades reset each match. The server checks every purchase.
 - **Three classes**
 
 | Class | Speed | Weapon | Passive | Grenades (start / max) |
@@ -92,7 +93,7 @@ The host (👑, the first person in the lobby) sets up each match from the lobby
 | Combat | Weapon damage, bonus starting shield, grenades (off / normal / double), kill streak rewards on/off |
 | Classes | Allow or ban Sniper, Rifle or Melee |
 | Zone | Zone speed, zone damage |
-| World | Loot amount, supply drop frequency (or off), bounty on/off, word scavenge on/off |
+| World | Loot amount, supply drop frequency (or off), bounty on/off, word scavenge on/off, word density (low / normal / high ×3) |
 
 ## 🔊 Voice lines
 
@@ -122,7 +123,8 @@ Each moment picks one of its takes at random. A **🔊 Voice** volume slider is 
 | Grenade | Hold **G** to aim, release to throw | Hold **💣** (drag to aim), release to throw |
 | Kill streak rewards | 1 / 2 / 3 / 4 | ⭐ menu |
 | Jetpack | Double-tap Space (Space again to land, C to sink) | Double-tap **JUMP** |
-| Shop | B (1–0 to buy) | 🛒 |
+| Smoke grenade | V | 🌫️ (appears when you have one) |
+| Shop | B (1–0, -, = to buy) | 🛒 |
 | Scoreboard | Tab | ☰ |
 
 When you're eliminated you spectate the other players. Click or tap to switch who you're watching.

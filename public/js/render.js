@@ -1,6 +1,6 @@
 // All three.js rendering: sky, the city, players, pickups, zone wall, grenades, effects and first-person weapons.
 import * as THREE from 'three';
-import { CLASSES, GRENADE, DROP_FALL_SPEED } from '../shared/config.js';
+import { CLASSES, GRENADE, DROP_FALL_SPEED, SMOKE } from '../shared/config.js';
 
 const tmpColor = new THREE.Color();
 const UP = new THREE.Vector3(0, 1, 0);
@@ -70,6 +70,9 @@ export class Renderer {
     this.projectiles = [];
     this.turrets = new Map();
     this.words = new Map();
+    this.smokes = [];
+    // smoke: one shared 20-triangle shape for every puff keeps it cheap even on tablets
+    this.puffGeo = new THREE.IcosahedronGeometry(1, 0);
     this.wallhack = false;
     this.time = 0;
     this.shake = 0;
@@ -441,7 +444,7 @@ export class Renderer {
       this.words.set(id, s);
     }
   }
-  disposeWord(s) { this.scene.remove(s); s.material.map.dispose(); s.material.dispose(); }
+  disposeWord(s) { this.scene.remove(s); s.material.dispose(); } // textures are cached per word and reused
   takeWord(id, good) {
     const s = this.words.get(id);
     if (!s) return null;
@@ -454,6 +457,41 @@ export class Renderer {
   updateWords() {
     for (const s of this.words.values()) s.position.y = s.userData.baseY + Math.sin(this.time * 2 + s.position.x * 0.7) * 0.15;
   }
+
+  // ------------------------------------------------------------- smoke grenades
+  addSmoke(pos, dur) {
+    const mat = new THREE.MeshLambertMaterial({ color: 0xdfe6ee, emissive: 0x4a5260, flatShading: true, transparent: true, opacity: 0.96, side: THREE.DoubleSide });
+    const g = new THREE.Group();
+    const R = SMOKE.radius;
+    for (let i = 0; i < SMOKE.puffs; i++) {
+      const m = new THREE.Mesh(this.puffGeo, mat);
+      const a = (i / SMOKE.puffs) * Math.PI * 2, d = i === 0 ? 0 : R * (0.35 + Math.random() * 0.4);
+      m.position.set(Math.cos(a) * d, 0.6 + Math.random() * 2.6, Math.sin(a) * d);
+      m.rotation.set(Math.random() * 3, Math.random() * 3, 0);
+      m.userData.size = R * (0.55 + Math.random() * 0.35);
+      m.scale.setScalar(0.01);
+      g.add(m);
+    }
+    g.position.set(pos[0], pos[1], pos[2]);
+    this.scene.add(g);
+    this.smokes.push({ g, mat, t: 0, dur });
+  }
+  updateSmokes(dt) {
+    for (let i = this.smokes.length - 1; i >= 0; i--) {
+      const s = this.smokes[i];
+      s.t += dt;
+      const grow = Math.min(1, s.t / 1.2), fade = Math.max(0, Math.min(1, (s.dur - s.t) / 2));
+      for (const m of s.g.children) {
+        m.scale.setScalar(m.userData.size * (0.3 + 0.7 * grow) * (1 + s.t * 0.015));
+        m.rotation.y += dt * 0.15;
+        m.position.y += dt * 0.05;
+      }
+      s.mat.opacity = 0.96 * fade;
+      s.mat.depthWrite = fade > 0.9;
+      if (s.t >= s.dur) { this.scene.remove(s.g); s.mat.dispose(); this.smokes.splice(i, 1); }
+    }
+  }
+  clearSmokes() { for (const s of this.smokes) { this.scene.remove(s.g); s.mat.dispose(); } this.smokes = []; }
 
   // ------------------------------------------------------------- kill streak turrets / airstrikes
   syncTurrets(list, colors) {
@@ -490,9 +528,10 @@ export class Renderer {
   }
 
   // ------------------------------------------------------------- grenades
-  addNade(id) {
+  addNade(id, kind = 'nade') {
     const g = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.SphereGeometry(GRENADE.r, 12, 8), new THREE.MeshLambertMaterial({ color: 0x3ddc97, emissive: 0x0a4020 }));
+    const smoke = kind === 'smoke';
+    const body = new THREE.Mesh(new THREE.SphereGeometry(GRENADE.r, 12, 8), new THREE.MeshLambertMaterial({ color: smoke ? 0xb8c4d4 : 0x3ddc97, emissive: smoke ? 0x222831 : 0x0a4020 }));
     const band = new THREE.Mesh(new THREE.TorusGeometry(GRENADE.r * 0.95, 0.03, 6, 14), new THREE.MeshLambertMaterial({ color: 0xffd60a }));
     band.rotation.x = Math.PI / 2;
     const led = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff2d55 }));
@@ -700,6 +739,7 @@ export class Renderer {
     for (const e of [...this.effects, ...this.particles]) { this.scene.remove(e.obj); e.obj.traverse((o) => { if (o.geometry) { o.geometry.dispose(); o.material.dispose(); } }); }
     this.clearTurrets();
     this.clearWords();
+    this.clearSmokes();
     for (const P of this.projectiles) this.scene.remove(P.obj);
     this.effects = []; this.particles = []; this.projectiles = [];
   }
@@ -808,6 +848,7 @@ export class Renderer {
     this.updateEffects(dt);
     this.updatePickups(dt);
     this.updateWords();
+    this.updateSmokes(dt);
     this.zoneMat.uniforms.time.value = this.time;
     this.waterMat.uniforms.time.value = this.time;
     this.clouds.rotation.y += dt * 0.004;
@@ -1169,7 +1210,16 @@ function makeTurret(color) {
 
 const WORD_COLORS = ['#ff4d6d', '#3a86ff', '#3ddc97', '#ff9e00', '#b388ff', '#f15bb5', '#00b4d8', '#e76f51'];
 // A floating word label (sprite, always faces the camera).
+const wordTextures = new Map();
 function makeWordSprite(text) {
+  let tex = wordTextures.get(text);
+  if (!tex) { tex = wordTexture(text); wordTextures.set(text, tex); }
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  const h = 0.62;
+  s.scale.set(h * tex.image.width / tex.image.height, h, 1);
+  return s;
+}
+function wordTexture(text) {
   const c = document.createElement('canvas');
   const g = c.getContext('2d');
   const font = 'bold 72px Trebuchet MS, Arial, sans-serif';
@@ -1186,8 +1236,5 @@ function makeWordSprite(text) {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
-  const h = 0.62;
-  s.scale.set(h * c.width / c.height, h, 1);
-  return s;
+  return tex;
 }
